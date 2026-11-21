@@ -133,6 +133,25 @@ private fun isLoginRouteUrl(url: String?): Boolean {
     return Regex("""(/(login|signin|auth|register)(/|$|\?|#)|#(login|signin|auth))""").containsMatchIn(lower)
 }
 
+private fun resolveDojoCardDrawableRes(path: String): Int? {
+    val clean = path.lowercase()
+    return when {
+        clean.endsWith("/__dojo_assets/karate.jpg") || clean.endsWith("/images/card-karate.jpg") ->
+            R.drawable.img_card_karate
+        clean.endsWith("/__dojo_assets/gymnastics.jpg") || clean.endsWith("/images/card-gym.jpg") ->
+            R.drawable.img_card_gym
+        clean.endsWith("/__dojo_assets/muay_thai.jpg") ||
+            clean.endsWith("/images/card-muaythai.jpg") ||
+            clean.endsWith("/images/card-muay-thai.jpg") ->
+            R.drawable.img_card_muay_thai
+        clean.endsWith("/__dojo_assets/boxing.jpg") || clean.endsWith("/images/card-boxing.jpg") ->
+            R.drawable.img_card_boxing
+        clean.endsWith("/__dojo_assets/crossfit.jpg") || clean.endsWith("/images/card-crossfit.jpg") ->
+            R.drawable.img_card_crossfit
+        else -> null
+    }
+}
+
 private val GLASS_THEME_AND_VIEWPORT_JS = """
 (function(){
   if(!document.getElementById('dojo-viewport-fix')){
@@ -152,9 +171,44 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
       '.bank-back .label{margin-top:26px!important;}' +
       '.bank-back .number{direction:ltr!important;unicode-bidi:isolate!important;white-space:nowrap!important;font-size:clamp(14px,4.3vw,18px)!important;letter-spacing:1.5px!important;padding:4px 0!important;}' +
       '.bank-copy{position:relative!important;z-index:2!important;flex-shrink:0!important;min-height:38px!important;padding:8px 12px!important;}' +
-      'img[data-dojo-fallback="1"]{object-fit:cover!important;}' +
+      'img[data-dojo-fallback="1"],img[data-dojo-card-photo="1"]{object-fit:cover!important;object-position:center center!important;}' +
       'html:not(.dojo-login-active) body{padding-bottom:72px!important;}';
     (document.head||document.documentElement).appendChild(s);
+  }
+  function normalizeFaText(txt){
+    return String(txt||'')
+      .replace(/[\u200c\u200d\s_-]+/g,'')
+      .replace(/\u0643/g,'\u06a9')
+      .replace(/\u064a/g,'\u06cc')
+      .toLowerCase();
+  }
+  function matchDojoSportPath(norm){
+    if(!norm) return '';
+    if(norm.indexOf('کاراته')!==-1 || norm.indexOf('karate')!==-1) return '/__dojo_assets/karate.jpg';
+    if(norm.indexOf('ژیمناستیک')!==-1 || norm.indexOf('gymnastic')!==-1 || norm.indexOf('cardgym')!==-1) return '/__dojo_assets/gymnastics.jpg';
+    if(norm.indexOf('مویتای')!==-1 || norm.indexOf('muay')!==-1) return '/__dojo_assets/muay_thai.jpg';
+    if(norm.indexOf('بوکس')!==-1 || norm.indexOf('boxing')!==-1) return '/__dojo_assets/boxing.jpg';
+    if(norm.indexOf('کراسفیت')!==-1 || norm.indexOf('crossfit')!==-1) return '/__dojo_assets/crossfit.jpg';
+    return '';
+  }
+  function resolveDojoSportAssetPath(img){
+    if(!img) return '';
+    var alt=(img.getAttribute('alt')||'').trim();
+    var rect=img.getBoundingClientRect ? img.getBoundingClientRect() : {width:0,height:0};
+    if(rect.width>0 && rect.width<=48 && rect.height>0 && rect.height<=48 && !alt) return '';
+    var labelParts=[
+      alt,
+      img.getAttribute('title')||'',
+      img.getAttribute('aria-label')||''
+    ];
+    if(rect.width===0 || rect.width>=90 || rect.height>=90){
+      var card=img.closest ? img.closest('.csw-card, .card, .sport-card, [class*="card"]') : null;
+      if(card && card.textContent) labelParts.push(card.textContent);
+      else if(img.parentElement && img.parentElement.textContent) labelParts.push(img.parentElement.textContent);
+    }
+    var byLabel=matchDojoSportPath(normalizeFaText(labelParts.join(' ')));
+    if(byLabel) return byLabel;
+    return matchDojoSportPath(normalizeFaText(img.getAttribute('src')||''));
   }
   function buildDojoFallbackSvg(altText){
     var a=(altText||'').replace(/\u200c/g,' ').replace(/\u0643/g,'\u06a9').replace(/\u064a/g,'\u06cc');
@@ -201,7 +255,24 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
   function handleBrokenImage(img){
     if(!img || img.nodeName!=='IMG') return;
     var curSrc=img.getAttribute('src')||'';
-    if(curSrc.indexOf('data:image/svg+xml')===0 || img.getAttribute('data-dojo-fallback')==='1') return;
+    if(curSrc.indexOf('data:image/svg+xml')===0) return;
+    var alt=(img.getAttribute('alt')||'').trim();
+    if(curSrc.indexOf('/__dojo_assets/')!==-1){
+      if(img.getAttribute('data-dojo-svg-tried')==='1') return;
+      img.setAttribute('data-dojo-svg-tried','1');
+      img.setAttribute('data-dojo-fallback','1');
+      img.src=buildDojoFallbackSvg(alt);
+      return;
+    }
+    var sportAsset=resolveDojoSportAssetPath(img);
+    if(sportAsset){
+      img.setAttribute('data-dojo-fallback','1');
+      img.setAttribute('data-dojo-card-photo','1');
+      img.removeAttribute('data-dojo-svg-tried');
+      img.src=sportAsset;
+      return;
+    }
+    if(img.getAttribute('data-dojo-fallback')==='1') return;
     if(!img.getAttribute('data-dojo-img-retried') && curSrc && navigator.onLine!==false){
       img.setAttribute('data-dojo-img-retried','1');
       var sep=curSrc.indexOf('?')===-1?'?':'&';
@@ -209,7 +280,6 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
       return;
     }
     var rect=img.getBoundingClientRect ? img.getBoundingClientRect() : {width:0,height:0};
-    var alt=(img.getAttribute('alt')||'').trim();
     var isTiny=(rect.width>0 && rect.width<=34 && rect.height>0 && rect.height<=34) && !alt;
     if(isTiny){
       img.setAttribute('data-dojo-fallback','1');
@@ -225,8 +295,34 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
     for(var ii=0;ii<imgs.length;ii++){
       var im=imgs[ii];
       if(!im) continue;
-      if(im.getAttribute('data-dojo-fallback')==='1') continue;
       var s=im.getAttribute('src')||'';
+      var expectedSport=resolveDojoSportAssetPath(im);
+      var isCardSwapPhoto=(im.classList && im.classList.contains('csw-photo')) || (im.closest && !!im.closest('.csw-card'));
+      if(isCardSwapPhoto && expectedSport && s.indexOf(expectedSport)===-1 && im.getAttribute('data-dojo-svg-tried')!=='1'){
+        im.setAttribute('data-dojo-fallback','1');
+        im.setAttribute('data-dojo-card-photo','1');
+        im.src=expectedSport;
+        continue;
+      }
+      if(s.indexOf('/__dojo_assets/')!==-1){
+        if(expectedSport && s.indexOf(expectedSport)===-1){
+          im.src=expectedSport;
+        }
+        continue;
+      }
+      if(s.indexOf('data:image/svg+xml')===0){
+        if(expectedSport && im.getAttribute('data-dojo-svg-tried')!=='1'){
+          im.setAttribute('data-dojo-fallback','1');
+          im.setAttribute('data-dojo-card-photo','1');
+          im.src=expectedSport;
+        }
+        continue;
+      }
+      if(im.getAttribute('data-dojo-fallback')==='1'){
+        im.removeAttribute('data-dojo-fallback');
+        im.removeAttribute('data-dojo-card-photo');
+        im.removeAttribute('data-dojo-img-retried');
+      }
       if(!s || (im.complete && im.naturalWidth===0)){
         handleBrokenImage(im);
       }
@@ -499,7 +595,7 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
     }
     if(typeof MutationObserver==='function' && document.body){
       var obs=new MutationObserver(triggerSync);
-      obs.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style','hidden']});
+      obs.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style','hidden','src','alt']});
     }
   }
   if(window.scrollX!==0){window.scrollTo(0,window.scrollY);}
@@ -1227,14 +1323,33 @@ fun DojoPortalScreen(
                                 val uri = request?.url ?: return null
                                 val host = uri.host?.lowercase() ?: ""
                                 val path = uri.path ?: ""
-                                if ((host == "arsalan.up.railway.app" || host.endsWith(".arsalan.up.railway.app")) &&
-                                    (path == "/OneTimeCode.js" || path.endsWith("/OneTimeCode.js"))
-                                ) {
-                                    return WebResourceResponse(
-                                        "application/javascript",
-                                        "UTF-8",
-                                        ByteArrayInputStream(SMOOTH_ONE_TIME_CODE_JS.toByteArray(Charsets.UTF_8))
-                                    )
+                                if (host == "arsalan.up.railway.app" || host.endsWith(".arsalan.up.railway.app")) {
+                                    if (path == "/OneTimeCode.js" || path.endsWith("/OneTimeCode.js")) {
+                                        return WebResourceResponse(
+                                            "application/javascript",
+                                            "UTF-8",
+                                            ByteArrayInputStream(SMOOTH_ONE_TIME_CODE_JS.toByteArray(Charsets.UTF_8))
+                                        )
+                                    }
+                                    val cardDrawableRes = resolveDojoCardDrawableRes(path)
+                                    if (cardDrawableRes != null) {
+                                        val bytes = runCatching {
+                                            ctx.resources.openRawResource(cardDrawableRes).use { it.readBytes() }
+                                        }.getOrNull()
+                                        if (bytes != null) {
+                                            return WebResourceResponse(
+                                                "image/jpeg",
+                                                null,
+                                                200,
+                                                "OK",
+                                                mapOf(
+                                                    "Access-Control-Allow-Origin" to "*",
+                                                    "Cache-Control" to "public, max-age=86400"
+                                                ),
+                                                ByteArrayInputStream(bytes)
+                                            )
+                                        }
+                                    }
                                 }
                                 return super.shouldInterceptRequest(view, request)
                             }

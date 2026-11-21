@@ -13,8 +13,13 @@
     <string name="error_gemini_offline">برای ارتباط با هوش مصنوعی باید به اینترنت متصل باشید.</string>
     <string name="error_gemini_timeout">زمان پاسخ‌گویی هوش مصنوعی به پایان رسید. لطفاً دوباره تلاش کنید.</string>
     <string name="error_gemini_unavailable">سرویس هوش مصنوعی موقتاً در دسترس نیست. لطفاً کمی بعد دوباره امتحان کنید.</string>
+    <string name="error_gemini_unavailable_detail">سرویس هوش مصنوعی موقتاً در دسترس نیست (%1$s). لطفاً کمی بعد دوباره امتحان کنید.</string>
+    <string name="error_gemini_location">سرویس هوش مصنوعی در موقعیت یا آی‌پی فعلی در دسترس نیست. لطفاً VPN را فعال یا سرور آن را تغییر دهید و دوباره تلاش کنید.</string>
+    <string name="error_gemini_app_check">تایید امنیتی برنامه با سرور انجام نشد (%1$s). لطفاً اتصال اینترنت یا VPN را بررسی کنید و دوباره تلاش نمایید.</string>
+    <string name="error_gemini_connection_reset">ارتباط با سرور هوش مصنوعی قطع شد (%1$s). لطفاً اینترنت یا VPN خود را بررسی کنید و دوباره تلاش کنید.</string>
     <string name="error_gemini_quota">محدودیت درخواست‌های هوش مصنوعی پر شده است. لطفاً کمی صبر کنید.</string>
     <string name="error_gemini_generic">خطا در دریافت پاسخ از هوش مصنوعی. لطفاً دوباره تلاش کنید.</string>
+    <string name="error_gemini_generic_detail">خطا در دریافت پاسخ از هوش مصنوعی (%1$s). لطفاً دوباره تلاش کنید.</string>
     <string name="action_retry">تلاش مجدد</string>
     <string name="meal_plan_fab_label">برنامه غذایی AI</string>
     <string name="meal_plan_title">برنامه غذایی هوشمند</string>

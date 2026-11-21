@@ -6,7 +6,18 @@ import com.example.R
 import com.example.util.isCurrentlyConnected
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
+import com.google.firebase.ai.type.APINotConfiguredException
+import com.google.firebase.ai.type.ContentBlockedException
+import com.google.firebase.ai.type.InvalidAPIKeyException
+import com.google.firebase.ai.type.PermissionMissingException
+import com.google.firebase.ai.type.PromptBlockedException
+import com.google.firebase.ai.type.QuotaExceededException
+import com.google.firebase.ai.type.RequestTimeoutException
 import com.google.firebase.ai.type.Schema
+import com.google.firebase.ai.type.ServerException
+import com.google.firebase.ai.type.ServiceConnectionHandshakeFailedException
+import com.google.firebase.ai.type.ServiceDisabledException
+import com.google.firebase.ai.type.UnsupportedUserLocationException
 import com.google.firebase.ai.type.generationConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -22,6 +33,8 @@ import java.net.UnknownHostException
 
 private const val TAG = "GeminiAiClient"
 private const val DEFAULT_TIMEOUT_MS = 60_000L
+private const val PRIMARY_MODEL = "gemini-3.8-flash"
+private const val FALLBACK_MODEL = "gemini-3.5-flash-lite"
 
 sealed interface AiResponseState {
     data object Idle : AiResponseState
@@ -32,13 +45,18 @@ sealed interface AiResponseState {
 }
 
 class GeminiAiClient(
-    private val context: Context,
-    modelName: String = "gemini-3.8-flash"
+    context: Context,
+    private val modelName: String = PRIMARY_MODEL,
+    private val fallbackModelName: String = FALLBACK_MODEL
 ) {
     private val appContext = context.applicationContext
 
     private val model by lazy {
         Firebase.ai.generativeModel(modelName)
+    }
+
+    private val fallbackModel by lazy {
+        Firebase.ai.generativeModel(fallbackModelName)
     }
 
     private val mealPlanSchema by lazy {
@@ -86,18 +104,42 @@ class GeminiAiClient(
         )
     }
 
+    private val fallbackMealPlanModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = fallbackModelName,
+            generationConfig = generationConfig {
+                responseMimeType = "application/json"
+                responseSchema = mealPlanSchema
+            }
+        )
+    }
+
     suspend fun generateMealPlan(request: MealPlanRequest): MealPlanUiState {
         if (!isCurrentlyConnected(appContext)) {
             return MealPlanUiState.Error(appContext.getString(R.string.error_gemini_offline))
         }
         val prompt = buildMealPlanPrompt(request)
         return try {
-            val response = withTimeout(DEFAULT_TIMEOUT_MS) {
-                mealPlanModel.generateContent(prompt)
+            val response = try {
+                withTimeout(DEFAULT_TIMEOUT_MS) {
+                    mealPlanModel.generateContent(prompt)
+                }
+            } catch (primaryError: Exception) {
+                if (shouldRetryWithFallbackModel(primaryError) && fallbackModelName != modelName) {
+                    Log.w(TAG, "Primary model $modelName failed; retrying with $fallbackModelName", primaryError)
+                    withTimeout(DEFAULT_TIMEOUT_MS) {
+                        fallbackMealPlanModel.generateContent(prompt)
+                    }
+                } else {
+                    throw primaryError
+                }
             }
             val jsonText = response.text
                 ?: return MealPlanUiState.Error(appContext.getString(R.string.error_gemini_generic))
             val parsed = parseMealPlanJson(jsonText)
+            if (parsed.meals.isEmpty()) {
+                return MealPlanUiState.Error(appContext.getString(R.string.error_gemini_generic))
+            }
             MealPlanUiState.Success(parsed)
         } catch (e: TimeoutCancellationException) {
             Log.e(TAG, "Meal plan generation timed out", e)
@@ -180,8 +222,19 @@ class GeminiAiClient(
             return AiResponseState.Error(appContext.getString(R.string.error_gemini_offline))
         }
         return try {
-            val response = withTimeout(DEFAULT_TIMEOUT_MS) {
-                model.generateContent(prompt)
+            val response = try {
+                withTimeout(DEFAULT_TIMEOUT_MS) {
+                    model.generateContent(prompt)
+                }
+            } catch (primaryError: Exception) {
+                if (shouldRetryWithFallbackModel(primaryError) && fallbackModelName != modelName) {
+                    Log.w(TAG, "Primary model $modelName failed; retrying with $fallbackModelName", primaryError)
+                    withTimeout(DEFAULT_TIMEOUT_MS) {
+                        fallbackModel.generateContent(prompt)
+                    }
+                } else {
+                    throw primaryError
+                }
             }
             val text = response.text
             if (!text.isNullOrBlank()) {
@@ -235,37 +288,87 @@ class GeminiAiClient(
         }
     }
 
+    private fun shouldRetryWithFallbackModel(error: Throwable): Boolean {
+        val chain = generateSequence(error) { it.cause }.toList()
+        if (chain.any {
+                it is CancellationException ||
+                    it is TimeoutCancellationException ||
+                    it is UnsupportedUserLocationException ||
+                    it is QuotaExceededException ||
+                    it is UnknownHostException ||
+                    it is ConnectException
+            }
+        ) {
+            return false
+        }
+        val combinedMsg = chain.mapNotNull { it.message }.joinToString(" ").lowercase()
+        if (combinedMsg.contains("location is not supported") ||
+            combinedMsg.contains("429") ||
+            combinedMsg.contains("quota")
+        ) {
+            return false
+        }
+        return true
+    }
+
     private fun toUserFriendlyMessage(error: Throwable): String {
         if (!isCurrentlyConnected(appContext)) {
             return appContext.getString(R.string.error_gemini_offline)
         }
-        val msg = error.message?.lowercase().orEmpty()
-        val cause = error.cause
+        val chain = generateSequence(error) { it.cause }.toList()
+        val combinedMsg = chain.mapNotNull { it.message }.joinToString(" | ")
+        val lower = combinedMsg.lowercase()
+        val codeTag = chain.firstOrNull()?.let { it::class.simpleName } ?: "Unknown"
+
         return when {
-            error is UnknownHostException ||
-                error is ConnectException ||
-                cause is UnknownHostException ||
-                cause is ConnectException ||
-                msg.contains("unable to resolve host") ||
-                msg.contains("network") -> {
+            chain.any { it is UnsupportedUserLocationException } ||
+                lower.contains("location is not supported") ||
+                lower.contains("user location") ||
+                lower.contains("country") ||
+                lower.contains("region") -> {
+                appContext.getString(R.string.error_gemini_location)
+            }
+            chain.any { it is UnknownHostException || it is ConnectException } ||
+                lower.contains("unable to resolve host") ||
+                lower.contains("failed to connect") -> {
                 appContext.getString(R.string.error_gemini_offline)
             }
-            error is SocketTimeoutException ||
-                cause is SocketTimeoutException ||
-                msg.contains("timeout") -> {
+            chain.any { it is SocketTimeoutException || it is RequestTimeoutException } ||
+                lower.contains("timeout") ||
+                lower.contains("timed out") -> {
                 appContext.getString(R.string.error_gemini_timeout)
             }
-            msg.contains("429") || msg.contains("quota") || msg.contains("resource_exhausted") -> {
+            chain.any { it is QuotaExceededException } ||
+                lower.contains("429") ||
+                lower.contains("quota") ||
+                lower.contains("resource_exhausted") -> {
                 appContext.getString(R.string.error_gemini_quota)
             }
-            msg.contains("403") ||
-                msg.contains("app check") ||
-                msg.contains("unavailable") ||
-                msg.contains("503") ||
-                error is IOException -> {
-                appContext.getString(R.string.error_gemini_unavailable)
+            chain.any {
+                it is ServiceConnectionHandshakeFailedException ||
+                    it is APINotConfiguredException ||
+                    it is ServiceDisabledException ||
+                    it is PermissionMissingException ||
+                    it is InvalidAPIKeyException
+            } ||
+                lower.contains("app check") ||
+                lower.contains("appcheck") ||
+                lower.contains("attestation") ||
+                lower.contains("recaptcha") ||
+                lower.contains("403") -> {
+                appContext.getString(R.string.error_gemini_app_check, codeTag)
             }
-            else -> appContext.getString(R.string.error_gemini_generic)
+            chain.any { it is IOException } -> {
+                appContext.getString(R.string.error_gemini_connection_reset, codeTag)
+            }
+            chain.any { it is ServerException || it is PromptBlockedException || it is ContentBlockedException } ||
+                lower.contains("unavailable") ||
+                lower.contains("503") -> {
+                appContext.getString(R.string.error_gemini_unavailable_detail, codeTag)
+            }
+            else -> {
+                appContext.getString(R.string.error_gemini_generic_detail, codeTag)
+            }
         }
     }
 }
