@@ -118,6 +118,14 @@ class GeminiAiClient(
         if (!isCurrentlyConnected(appContext)) {
             return MealPlanUiState.Error(appContext.getString(R.string.error_gemini_offline))
         }
+        val appCheckPreflight = ensureValidAppCheckToken(appContext)
+        val appCheckDiag = (appCheckPreflight as? AppCheckPreflightResult.Failed)?.let { failed ->
+            val underlying = failed.underlyingError
+            if (underlying != null && isImmediateNetworkOrTimeout(underlying)) {
+                return MealPlanUiState.Error(toUserFriendlyMessage(underlying, failed.diagnostic))
+            }
+            failed.diagnostic
+        }
         val prompt = buildMealPlanPrompt(request)
         return try {
             val response = try {
@@ -147,8 +155,8 @@ class GeminiAiClient(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Meal plan generation failed", e)
-            MealPlanUiState.Error(toUserFriendlyMessage(e))
+            Log.e(TAG, "Meal plan generation failed (appCheck=$appCheckDiag)", e)
+            MealPlanUiState.Error(toUserFriendlyMessage(e, appCheckDiag))
         }
     }
 
@@ -221,6 +229,14 @@ class GeminiAiClient(
         if (!isCurrentlyConnected(appContext)) {
             return AiResponseState.Error(appContext.getString(R.string.error_gemini_offline))
         }
+        val appCheckPreflight = ensureValidAppCheckToken(appContext)
+        val appCheckDiag = (appCheckPreflight as? AppCheckPreflightResult.Failed)?.let { failed ->
+            val underlying = failed.underlyingError
+            if (underlying != null && isImmediateNetworkOrTimeout(underlying)) {
+                return AiResponseState.Error(toUserFriendlyMessage(underlying, failed.diagnostic))
+            }
+            failed.diagnostic
+        }
         return try {
             val response = try {
                 withTimeout(DEFAULT_TIMEOUT_MS) {
@@ -248,8 +264,8 @@ class GeminiAiClient(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Firebase AI generation failed", e)
-            AiResponseState.Error(toUserFriendlyMessage(e))
+            Log.e(TAG, "Firebase AI generation failed (appCheck=$appCheckDiag)", e)
+            AiResponseState.Error(toUserFriendlyMessage(e, appCheckDiag))
         }
     }
 
@@ -259,20 +275,39 @@ class GeminiAiClient(
             return@flow
         }
         emit(AiResponseState.Loading)
+        val appCheckPreflight = ensureValidAppCheckToken(appContext)
+        val appCheckDiag = (appCheckPreflight as? AppCheckPreflightResult.Failed)?.let { failed ->
+            val underlying = failed.underlyingError
+            if (underlying != null && isImmediateNetworkOrTimeout(underlying)) {
+                emit(AiResponseState.Error(toUserFriendlyMessage(underlying, failed.diagnostic)))
+                return@flow
+            }
+            failed.diagnostic
+        }
         val accumulated = StringBuilder()
-        withTimeout(DEFAULT_TIMEOUT_MS) {
-            model.generateContentStream(prompt).collect { chunk ->
-                val chunkText = chunk.text.orEmpty()
-                if (chunkText.isNotEmpty()) {
-                    accumulated.append(chunkText)
-                    emit(AiResponseState.Streaming(accumulated.toString()))
+        try {
+            withTimeout(DEFAULT_TIMEOUT_MS) {
+                model.generateContentStream(prompt).collect { chunk ->
+                    val chunkText = chunk.text.orEmpty()
+                    if (chunkText.isNotEmpty()) {
+                        accumulated.append(chunkText)
+                        emit(AiResponseState.Streaming(accumulated.toString()))
+                    }
                 }
             }
-        }
-        if (accumulated.isNotBlank()) {
-            emit(AiResponseState.Success(accumulated.toString()))
-        } else {
-            emit(AiResponseState.Error(appContext.getString(R.string.error_gemini_generic)))
+            if (accumulated.isNotBlank()) {
+                emit(AiResponseState.Success(accumulated.toString()))
+            } else {
+                emit(AiResponseState.Error(appContext.getString(R.string.error_gemini_generic)))
+            }
+        } catch (e: TimeoutCancellationException) {
+            Log.e(TAG, "Streaming timed out", e)
+            emit(AiResponseState.Error(appContext.getString(R.string.error_gemini_timeout)))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Streaming generation failed (appCheck=$appCheckDiag)", e)
+            emit(AiResponseState.Error(toUserFriendlyMessage(e, appCheckDiag)))
         }
     }.catch { e ->
         when (e) {
@@ -283,92 +318,180 @@ class GeminiAiClient(
             }
             else -> {
                 Log.e(TAG, "Streaming generation failed", e)
-                emit(AiResponseState.Error(toUserFriendlyMessage(e)))
+                emit(AiResponseState.Error(toUserFriendlyMessage(e, null)))
             }
         }
     }
 
-    private fun shouldRetryWithFallbackModel(error: Throwable): Boolean {
-        val chain = generateSequence(error) { it.cause }.toList()
-        if (chain.any {
-                it is CancellationException ||
-                    it is TimeoutCancellationException ||
-                    it is UnsupportedUserLocationException ||
-                    it is QuotaExceededException ||
-                    it is UnknownHostException ||
-                    it is ConnectException
-            }
-        ) {
-            return false
-        }
-        val combinedMsg = chain.mapNotNull { it.message }.joinToString(" ").lowercase()
-        if (combinedMsg.contains("location is not supported") ||
-            combinedMsg.contains("429") ||
-            combinedMsg.contains("quota")
-        ) {
-            return false
-        }
-        return true
-    }
-
-    private fun toUserFriendlyMessage(error: Throwable): String {
+    private fun toUserFriendlyMessage(
+        error: Throwable,
+        appCheckDiagnostic: String? = null
+    ): String {
         if (!isCurrentlyConnected(appContext)) {
             return appContext.getString(R.string.error_gemini_offline)
         }
-        val chain = generateSequence(error) { it.cause }.toList()
-        val combinedMsg = chain.mapNotNull { it.message }.joinToString(" | ")
-        val lower = combinedMsg.lowercase()
-        val codeTag = chain.firstOrNull()?.let { it::class.simpleName } ?: "Unknown"
-
-        return when {
-            chain.any { it is UnsupportedUserLocationException } ||
-                lower.contains("location is not supported") ||
-                lower.contains("user location") ||
-                lower.contains("country") ||
-                lower.contains("region") -> {
-                appContext.getString(R.string.error_gemini_location)
-            }
-            chain.any { it is UnknownHostException || it is ConnectException } ||
-                lower.contains("unable to resolve host") ||
-                lower.contains("failed to connect") -> {
-                appContext.getString(R.string.error_gemini_offline)
-            }
-            chain.any { it is SocketTimeoutException || it is RequestTimeoutException } ||
-                lower.contains("timeout") ||
-                lower.contains("timed out") -> {
-                appContext.getString(R.string.error_gemini_timeout)
-            }
-            chain.any { it is QuotaExceededException } ||
-                lower.contains("429") ||
-                lower.contains("quota") ||
-                lower.contains("resource_exhausted") -> {
-                appContext.getString(R.string.error_gemini_quota)
-            }
-            chain.any {
-                it is ServiceConnectionHandshakeFailedException ||
-                    it is APINotConfiguredException ||
-                    it is ServiceDisabledException ||
-                    it is PermissionMissingException ||
-                    it is InvalidAPIKeyException
-            } ||
-                lower.contains("app check") ||
-                lower.contains("appcheck") ||
-                lower.contains("attestation") ||
-                lower.contains("recaptcha") ||
-                lower.contains("403") -> {
-                appContext.getString(R.string.error_gemini_app_check, codeTag)
-            }
-            chain.any { it is IOException } -> {
-                appContext.getString(R.string.error_gemini_connection_reset, codeTag)
-            }
-            chain.any { it is ServerException || it is PromptBlockedException || it is ContentBlockedException } ||
-                lower.contains("unavailable") ||
-                lower.contains("503") -> {
-                appContext.getString(R.string.error_gemini_unavailable_detail, codeTag)
-            }
-            else -> {
-                appContext.getString(R.string.error_gemini_generic_detail, codeTag)
-            }
+        val category = classifyGeminiError(error)
+        val diagnosticTag = buildDiagnosticTag(error, appCheckDiagnostic)
+        return when (category) {
+            GeminiErrorCategory.LOCATION -> appContext.getString(R.string.error_gemini_location)
+            GeminiErrorCategory.OFFLINE -> appContext.getString(R.string.error_gemini_offline)
+            GeminiErrorCategory.TIMEOUT -> appContext.getString(R.string.error_gemini_timeout)
+            GeminiErrorCategory.QUOTA -> appContext.getString(R.string.error_gemini_quota)
+            GeminiErrorCategory.APP_CHECK -> appContext.getString(R.string.error_gemini_app_check, diagnosticTag)
+            GeminiErrorCategory.CONNECTION_RESET -> appContext.getString(R.string.error_gemini_connection_reset, diagnosticTag)
+            GeminiErrorCategory.UNAVAILABLE -> appContext.getString(R.string.error_gemini_unavailable_detail, diagnosticTag)
+            GeminiErrorCategory.GENERIC -> appContext.getString(R.string.error_gemini_generic_detail, diagnosticTag)
         }
+    }
+}
+
+internal enum class GeminiErrorCategory {
+    LOCATION,
+    OFFLINE,
+    TIMEOUT,
+    QUOTA,
+    APP_CHECK,
+    CONNECTION_RESET,
+    UNAVAILABLE,
+    GENERIC
+}
+
+internal fun isImmediateNetworkOrTimeout(error: Throwable): Boolean {
+    val chain = generateSequence(error) { it.cause }.toList()
+    return chain.any {
+        it is UnknownHostException ||
+            it is ConnectException ||
+            it is SocketTimeoutException ||
+            it is TimeoutCancellationException ||
+            it is RequestTimeoutException
+    }
+}
+
+internal fun shouldRetryWithFallbackModel(error: Throwable): Boolean {
+    val chain = generateSequence(error) { it.cause }.toList()
+    if (chain.any {
+            it is CancellationException ||
+                it is TimeoutCancellationException ||
+                it is UnsupportedUserLocationException ||
+                it is QuotaExceededException ||
+                it is UnknownHostException ||
+                it is ConnectException ||
+                it is ServiceConnectionHandshakeFailedException ||
+                it is APINotConfiguredException ||
+                it is ServiceDisabledException ||
+                it is PermissionMissingException ||
+                it is InvalidAPIKeyException
+        }
+    ) {
+        return false
+    }
+    val combinedMsg = chain.mapNotNull { it.message }.joinToString(" ").lowercase()
+    if (combinedMsg.contains("location is not supported") ||
+        combinedMsg.contains("429") ||
+        combinedMsg.contains("quota") ||
+        combinedMsg.contains("403") ||
+        combinedMsg.contains("app check") ||
+        combinedMsg.contains("appcheck") ||
+        combinedMsg.contains("attestation") ||
+        combinedMsg.contains("recaptcha") ||
+        combinedMsg.contains("permission_denied")
+    ) {
+        return false
+    }
+    return true
+}
+
+internal fun classifyGeminiError(error: Throwable): GeminiErrorCategory {
+    val chain = generateSequence(error) { it.cause }.toList()
+    val combinedMsg = chain.mapNotNull { it.message }.joinToString(" | ")
+    val lower = combinedMsg.lowercase()
+
+    return when {
+        chain.any { it is UnsupportedUserLocationException } ||
+            lower.contains("location is not supported") ||
+            lower.contains("user location") ||
+            lower.contains("not available in your country") ||
+            lower.contains("not available in your region") -> {
+            GeminiErrorCategory.LOCATION
+        }
+        chain.any { it is UnknownHostException || it is ConnectException } ||
+            lower.contains("unable to resolve host") ||
+            lower.contains("failed to connect") -> {
+            GeminiErrorCategory.OFFLINE
+        }
+        chain.any { it is SocketTimeoutException || it is RequestTimeoutException || it is TimeoutCancellationException } ||
+            lower.contains("timeout") ||
+            lower.contains("timed out") -> {
+            GeminiErrorCategory.TIMEOUT
+        }
+        chain.any { it is QuotaExceededException } ||
+            lower.contains("429") ||
+            lower.contains("quota") ||
+            lower.contains("resource_exhausted") -> {
+            GeminiErrorCategory.QUOTA
+        }
+        chain.any {
+            it is ServiceConnectionHandshakeFailedException ||
+                it is APINotConfiguredException ||
+                it is ServiceDisabledException ||
+                it is PermissionMissingException ||
+                it is InvalidAPIKeyException
+        } ||
+            lower.contains("app check") ||
+            lower.contains("appcheck") ||
+            lower.contains("attestation") ||
+            lower.contains("recaptcha") ||
+            lower.contains("permission_denied") ||
+            lower.contains("403") -> {
+            GeminiErrorCategory.APP_CHECK
+        }
+        chain.any { it is IOException } -> {
+            GeminiErrorCategory.CONNECTION_RESET
+        }
+        chain.any { it is ServerException || it is PromptBlockedException || it is ContentBlockedException } ||
+            lower.contains("unavailable") ||
+            lower.contains("503") -> {
+            GeminiErrorCategory.UNAVAILABLE
+        }
+        else -> {
+            GeminiErrorCategory.GENERIC
+        }
+    }
+}
+
+internal fun buildDiagnosticTag(
+    error: Throwable,
+    appCheckDiagnostic: String? = null
+): String {
+    val chain = generateSequence(error) { it.cause }.toList()
+    val primaryClass = chain.firstOrNull()?.let { it::class.simpleName } ?: "Unknown"
+    val rawDetail = chain.asReversed().firstNotNullOfOrNull { t ->
+        t.message?.takeIf { it.isNotBlank() }
+    }
+    val cleanedDetail = sanitizeDiagnosticDetail(rawDetail, maxLen = 110)
+    val base = if (cleanedDetail.isNotBlank()) {
+        "$primaryClass: $cleanedDetail"
+    } else {
+        primaryClass
+    }
+    val acCleaned = sanitizeDiagnosticDetail(appCheckDiagnostic, maxLen = 80)
+    return if (acCleaned.isNotBlank() && !base.contains(acCleaned, ignoreCase = true)) {
+        "$base | AppCheck: $acCleaned"
+    } else {
+        base
+    }
+}
+
+internal fun sanitizeDiagnosticDetail(raw: String?, maxLen: Int = 120): String {
+    if (raw.isNullOrBlank()) return ""
+    val cleaned = raw
+        .replace(Regex("<[^>]*>"), " ")
+        .replace(Regex("https?://\\S+"), "")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+    return if (cleaned.length > maxLen) {
+        cleaned.take(maxLen - 1).trimEnd() + "…"
+    } else {
+        cleaned
     }
 }
