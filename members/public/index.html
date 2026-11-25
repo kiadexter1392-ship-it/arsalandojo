@@ -15,7 +15,7 @@
   <link rel="apple-touch-icon" href="/ui/icons/icon-192.png">
   <link rel="manifest" href="/manifest.json">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
-  <link rel="stylesheet" href="/ui/style.css?v=purple-2">
+  <link rel="stylesheet" href="/ui/style.css?v=purple-4">
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -108,6 +108,10 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <div class="cards-action-row">
+    <button type="button" class="btn btn-gold payment-cta-btn" id="openPaymentBtn">💳 پرداخت شهریه</button>
   </div>
 
   <div class="pricing-note">مهلت پرداخت تا ۱۲ هر ماه — فیش به <a href="https://ble.ir/+989016399804" target="_blank" rel="noopener" dir="ltr">+989016399804</a> ارسال شود.</div>
@@ -230,7 +234,7 @@
 <!-- SCRIPTS -->
 <script src="/ui/jalali.browser.js"></script>
 <script src="/ui/ui.js"></script>
-<script src="/CardStack.js?v=2"></script>
+<script src="/CardStack.js?v=4"></script>
 <script src="/OneTimeCode.js"></script>
 <script>
 (function() {
@@ -383,9 +387,18 @@
     }
   }).catch(function() {});
 
-  /* ── Pricing CardStack (vanilla JS) ── */
+  /* ── Pricing CardStack (vanilla JS) & Tuition Payment Modal ── */
+  var paymentPayload = {
+    baleLink: 'https://ble.ir/+989016399804',
+    supportPhone: '+989016399804',
+    pricing: []
+  };
+
   fetch(UI.PATH_PREFIX + '/api/payment').then(function(r) { return r.json(); }).then(function(d) {
     if (!d.ok) return;
+    if (d.baleLink) paymentPayload.baleLink = d.baleLink;
+    if (d.supportPhone) paymentPayload.supportPhone = d.supportPhone;
+    if (Array.isArray(d.pricing)) paymentPayload.pricing = d.pricing;
     var cards = (d.pricing || []).map(function(p) {
       return { discipline: p.discipline, price: p.price };
     });
@@ -394,6 +407,151 @@
       window.CardStack.mount(root, { cards: cards });
     }
   }).catch(function() {});
+
+  function getPostLoginTarget(defaultPath) {
+    try {
+      if (sessionStorage.getItem('arslan_post_login_view') === 'payment') {
+        sessionStorage.removeItem('arslan_post_login_view');
+        return UI.PATH_PREFIX + '/panel?view=payment';
+      }
+    } catch (_) {}
+    return UI.PATH_PREFIX + (defaultPath || '/panel');
+  }
+
+  function parsePricingToman(priceStr) {
+    var faDigits = String(priceStr || '').replace(/[۰-۹]/g, function(ch) {
+      return String('۰۱۲۳۴۵۶۷۸۹'.indexOf(ch));
+    });
+    var num = Number(faDigits.replace(/[^0-9]/g, ''));
+    return Number.isFinite(num) && num > 0 ? num * 1000 : '';
+  }
+
+  function openTuitionPaymentModal() {
+    if (!window.UI || !UI.modal) return;
+    var baleUrl = paymentPayload.baleLink || 'https://ble.ir/+989016399804';
+    var baleId = paymentPayload.supportPhone || '+989016399804';
+
+    var bodyHtml =
+      '<div class="payment-modal-card">' +
+        '<div style="font-weight:700;font-size:15px">۱. ارسال مستقیم فیش در پیام‌رسان بله مربی</div>' +
+        '<div style="font-size:13px;color:var(--text-light);line-height:1.7">پس از واریز شهریه به یکی از شماره کارت‌های بالا، تصویر فیش را به آیدی بله مربی ارسال کنید:</div>' +
+        '<div class="payment-modal-bale-id">' +
+          '<span dir="ltr" style="font-weight:700;font-family:ui-monospace,monospace">' + UI.esc(baleId) + '</span>' +
+          '<button type="button" class="btn btn-ghost" id="copyBaleIdBtn" style="padding:6px 12px;font-size:12px">📋 کپی آیدی</button>' +
+        '</div>' +
+        '<a href="' + UI.esc(baleUrl) + '" target="_blank" rel="noopener noreferrer" class="btn btn-gold btn-full" style="text-align:center">💬 باز کردن بله مربی (' + UI.esc(baleId) + ')</a>' +
+      '</div>' +
+      '<div class="payment-modal-card" id="landingReceiptBox">' +
+        '<div style="font-weight:700;font-size:15px">۲. ثبت فیش در فرم آنلاین باشگاه</div>' +
+        '<div style="font-size:13px;color:var(--muted)">در حال بررسی وضعیت ورود شما...</div>' +
+      '</div>';
+
+    UI.modal({
+      title: '💳 پرداخت شهریه و ارسال فیش',
+      body: bodyHtml,
+      actions: [{ label: 'بستن', class: 'ghost', onClick: UI.closeModal }],
+      onMount: function(overlay) {
+        var copyBtn = overlay.querySelector('#copyBaleIdBtn');
+        if (copyBtn) {
+          copyBtn.addEventListener('click', function() {
+            navigator.clipboard.writeText(baleId).then(function() {
+              copyBtn.textContent = '✅ کپی شد';
+              showToast('آیدی بله مربی کپی شد', 'ok');
+            }).catch(function() {
+              showToast('کپی ناموفق بود', 'warn');
+            });
+          });
+        }
+
+        var box = overlay.querySelector('#landingReceiptBox');
+        if (!box) return;
+
+        UI.api('/api/me').then(function(me) {
+          if (!me || !me.user) throw new Error('unauth');
+          var pricingList = paymentPayload.pricing || [];
+          var optionsHtml = pricingList.map(function(p) {
+            var toman = parsePricingToman(p.price);
+            return '<option value="' + UI.esc(String(toman)) + '">' + UI.esc(p.discipline) + ' — ' + UI.esc(p.price) + ' هزار تومان</option>';
+          }).join('');
+          var defaultAmount = pricingList.length ? parsePricingToman(pricingList[0].price) : '';
+
+          box.innerHTML =
+            '<div style="font-weight:700;font-size:15px">۲. ثبت فیش برای ' + UI.esc(me.user.full_name || me.user.username) + '</div>' +
+            '<form id="landingReceiptForm" style="display:flex;flex-direction:column;gap:10px">' +
+              (pricingList.length
+                ? '<div class="form-group"><label for="landingPlanSelect">انتخاب رشته</label><select id="landingPlanSelect">' + optionsHtml + '<option value="">مبلغ دلخواه</option></select></div>'
+                : '') +
+              '<div class="form-row" style="margin-bottom:0">' +
+                '<div class="form-group"><label for="landingAmount">مبلغ (تومان) *</label><input id="landingAmount" name="amount_toman" type="number" min="10000" required value="' + UI.esc(String(defaultAmount)) + '" dir="ltr"></div>' +
+                '<div class="form-group"><label for="landingTrack">کد پیگیری *</label><input id="landingTrack" name="tracking_code" required dir="ltr" placeholder="TRK-..."></div>' +
+              '</div>' +
+              '<div class="form-group"><label for="landingCard4">۴ رقم آخر کارت (اختیاری)</label><input id="landingCard4" name="card_last4" maxlength="4" dir="ltr" placeholder="6279"></div>' +
+              '<button type="submit" class="btn btn-gold btn-full">ثبت فیش شهریه</button>' +
+              '<a href="' + UI.esc(UI.PATH_PREFIX + '/panel?view=payment') + '" class="btn btn-ghost btn-full" style="text-align:center;font-size:13px">باز کردن بخش پرداخت شهریه در پنل</a>' +
+            '</form>';
+
+          var planSel = box.querySelector('#landingPlanSelect');
+          var amountInp = box.querySelector('#landingAmount');
+          if (planSel && amountInp) {
+            planSel.addEventListener('change', function() {
+              if (planSel.value) amountInp.value = planSel.value;
+            });
+          }
+
+          var form = box.querySelector('#landingReceiptForm');
+          if (form) {
+            form.addEventListener('submit', function(ev) {
+              ev.preventDefault();
+              var submitBtn = form.querySelector('button[type="submit"]');
+              if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'در حال ثبت...'; }
+              var jNow = window.Jalali ? window.Jalali.toJalali(new Date()) : { jy: 1405, jm: 1 };
+              var payload = {
+                year: jNow.jy,
+                month: jNow.jm,
+                amount_toman: Number(form.amount_toman.value),
+                tracking_code: form.tracking_code.value.trim(),
+                card_last4: form.card_last4.value.trim() || null
+              };
+              UI.api('/api/tuition/receipts', { method: 'POST', body: payload }).then(function() {
+                showToast('فیش شهریه با موفقیت ثبت شد', 'ok');
+                UI.closeModal();
+              }).catch(function(err) {
+                showToast((err && err.message) || 'خطا در ثبت فیش', 'warn');
+                if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'ثبت فیش شهریه'; }
+              });
+            });
+          }
+        }).catch(function() {
+          box.innerHTML =
+            '<div style="font-weight:700;font-size:15px">۲. ثبت فیش در پنل کاربری</div>' +
+            '<div style="font-size:13px;color:var(--text-light);line-height:1.7">برای ثبت فیش داخل پنل کاربری، ابتدا وارد حساب خود شوید تا مستقیماً به فرم ثبت فیش هدایت شوید.</div>' +
+            '<button type="button" class="btn btn-ghost btn-full" id="goLoginPaymentBtn">ورود و رفتن به فرم ثبت فیش</button>';
+
+          var loginGoBtn = box.querySelector('#goLoginPaymentBtn');
+          if (loginGoBtn) {
+            loginGoBtn.addEventListener('click', function() {
+              try { sessionStorage.setItem('arslan_post_login_view', 'payment'); } catch (_) {}
+              UI.closeModal();
+              showAuth('login');
+              var authSec = document.getElementById('auth');
+              if (authSec && authSec.scrollIntoView) {
+                authSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }
+              setTimeout(function() {
+                var u = document.getElementById('lUser');
+                if (u) u.focus();
+              }, 260);
+            });
+          }
+        });
+      }
+    });
+  }
+
+  var openPaymentBtn = document.getElementById('openPaymentBtn');
+  if (openPaymentBtn) {
+    openPaymentBtn.addEventListener('click', openTuitionPaymentModal);
+  }
 
   /* ── One-Time Code (as password field) ── */
   var otpInstance = null;
@@ -429,7 +587,7 @@
           window.AndroidDojoBridge.onPortalGoogleLoginComplete();
         }
         setTimeout(function() {
-          location.href = UI.PATH_PREFIX + (data.redirect || '/panel');
+          location.href = getPostLoginTarget(data.redirect || '/panel');
         }, 180);
         return;
       }
@@ -483,7 +641,7 @@
       if (window.AndroidDojoBridge && typeof window.AndroidDojoBridge.onPortalGoogleLoginComplete === 'function') {
         window.AndroidDojoBridge.onPortalGoogleLoginComplete();
       }
-      setTimeout(function() { location.href = UI.PATH_PREFIX + '/panel'; }, 300);
+      setTimeout(function() { location.href = getPostLoginTarget('/panel'); }, 300);
     }).catch(function(err) {
       showToast(err.message, 'warn');
       btn.disabled = false; btn.textContent = 'ورود';
@@ -507,7 +665,7 @@
       if (window.AndroidDojoBridge && typeof window.AndroidDojoBridge.onPortalGoogleLoginComplete === 'function') {
         window.AndroidDojoBridge.onPortalGoogleLoginComplete();
       }
-      setTimeout(function() { location.href = UI.PATH_PREFIX + '/panel'; }, 350);
+      setTimeout(function() { location.href = getPostLoginTarget('/panel'); }, 350);
     }).catch(function(err) {
       showAuthMsg(err.message, false);
       showToast(err.message, 'warn');

@@ -1,5 +1,5 @@
 /* Scope-aware static cache. Never store authenticated pages or API responses. */
-const CACHE_NAME = 'arslan-dojo-static-v5-' + new URL(self.registration.scope).pathname;
+const CACHE_NAME = 'arslan-dojo-static-v6-' + new URL(self.registration.scope).pathname;
 const ASSETS = ['ui/style.css', 'ui/shell.css', 'ui/ui.js', 'ui/jalali.browser.js', 'ui/icons/icon-192.png', 'panel-overview.css', 'panel-extras.js']
   .map(path => new URL(path, self.registration.scope).href);
 

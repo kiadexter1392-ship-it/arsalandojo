@@ -213,8 +213,17 @@ const PNG_1PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfF
     const cManifest = await api('/coach/manifest.json');
     assert.equal(cManifest.body.theme_color, '#6d28d9');
 
-    // 7. CardSwap valid JPEG assets, bank card LTR isolation, and full-discipline responsive CardStack
-    for (const img of ['card-karate.jpg', 'card-crossfit.jpg', 'card-boxing.jpg', 'card-muaythai.jpg', 'card-gym.jpg']) {
+    // 7. CardSwap/CardStack valid JPEG assets, bank card LTR isolation, no stk-chips, strict mobile fan bounds, and payment CTA
+    const cardImages = [
+      'card-karate.jpg',
+      'card-karate-kids.jpg',
+      'card-crossfit-kids.jpg',
+      'card-crossfit.jpg',
+      'card-boxing.jpg',
+      'card-muaythai.jpg',
+      'card-gym.jpg'
+    ];
+    for (const img of cardImages) {
       const imgRes = await fetch(base + '/images/' + img);
       assert.equal(imgRes.status, 200, img);
       assert.match(imgRes.headers.get('content-type') || '', /image\/jpeg/);
@@ -229,16 +238,45 @@ const PNG_1PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfF
     const homeHtml = await (await fetch(base + '/')).text();
     assert.ok(!homeHtml.includes('d.pricing.slice(0, 6)'), 'index.html must not truncate disciplines');
     assert.match(homeHtml, /class="number"\s+dir="ltr"/);
+    assert.match(homeHtml, /id="openPaymentBtn"/);
+    assert.match(homeHtml, /https:\/\/ble\.ir\/\+989016399804/);
+    assert.match(homeHtml, /\/panel\?view=payment/);
+
+    const panelJs = await (await fetch(base + '/panel.js')).text();
+    assert.match(panelJs, /new URLSearchParams\(location\.search\)\.get\('view'\)/);
 
     const cardStackJs = await (await fetch(base + '/CardStack.js')).text();
     assert.ok(!cardStackJs.includes('Math.min(cards.length, 6)'), 'CardStack must not truncate at 6 cards');
-    assert.match(cardStackJs, /stk-chip/);
+    assert.ok(!cardStackJs.includes('stk-chip'), 'CardStack must not render bottom stk-chip buttons');
+    assert.match(cardStackJs, /stk-cs-bg/);
+    assert.match(cardStackJs, /card-karate-kids\.jpg/);
+    assert.match(cardStackJs, /card-crossfit-kids\.jpg/);
+
+    // Execute CardStack._computeFanMetrics across mobile & tablet widths to prove zero horizontal overflow
+    const vm = require('node:vm');
+    const sandbox = { window: {} };
+    vm.runInNewContext(cardStackJs, sandbox);
+    const computeFanMetrics = sandbox.window.CardStack && sandbox.window.CardStack._computeFanMetrics;
+    assert.equal(typeof computeFanMetrics, 'function');
+    for (const width of [280, 320, 360, 390, 480, 768]) {
+      const n = 7;
+      const m = computeFanMetrics(width, n);
+      const outerRad = (m.fanAngle * ((n - 1) / 2) * Math.PI) / 180;
+      const pivotReachY = Math.max(m.cardH / 2, m.pivotY);
+      const rotatedHalfW = ((m.cardW / 2) * Math.cos(outerRad) + pivotReachY * Math.sin(outerRad)) * m.activeScale;
+      const minLeftEdge = m.centerX - m.maxSpreadHalf - rotatedHalfW;
+      const maxRightEdge = m.centerX + m.maxSpreadHalf + rotatedHalfW;
+      assert.ok(minLeftEdge >= 0, `width=${width} left overflow: ${minLeftEdge}`);
+      assert.ok(maxRightEdge <= m.containerW + 0.01, `width=${width} right overflow: ${maxRightEdge} > ${m.containerW}`);
+    }
 
     const uiCss = await (await fetch(base + '/ui/style.css')).text();
+    assert.ok(!uiCss.includes('.stk-chip'), 'style.css must not keep .stk-chip styles');
     assert.match(uiCss, /\.bank-back \.number[\s\S]*?direction:\s*ltr/);
     assert.match(uiCss, /\.bank-back \.number[\s\S]*?white-space:\s*nowrap/);
+    assert.match(uiCss, /\.payment-cta-btn/);
 
-    console.log('PASS: tuition receipts, attendance streaks, targeted notifications, coach reminders, filters, CSV exports, PWA manifests, CardSwap images, bank cards & responsive CardStack');
+    console.log('PASS: tuition receipts, attendance streaks, targeted notifications, coach reminders, filters, CSV exports, PWA manifests, 7 card artworks, mobile CardStack bounds & payment CTA');
   } finally {
     child.kill('SIGTERM');
     fs.rmSync(dir, { recursive: true, force: true });

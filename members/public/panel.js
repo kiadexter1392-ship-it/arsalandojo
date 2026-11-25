@@ -48,9 +48,12 @@
     document.getElementById('bellBtn').addEventListener('click', bellBox);
     document.getElementById('quickProgress').addEventListener('click', selfReportForm);
 
+    const requestedView = new URLSearchParams(location.search).get('view') || location.hash.replace(/^#/, '');
+    const initialView = Object.prototype.hasOwnProperty.call(TITLES, requestedView) ? requestedView : 'home';
+
     if (window.MagnifyingDock) {
       magnifyingDock = MagnifyingDock.mount(document.getElementById('magnifyingDock'), {
-        active: 'home',
+        active: initialView,
         label: 'ناوبری سریع پنل',
         items: [
           { key: 'home', label: 'خانه', icon: 'home' },
@@ -64,7 +67,7 @@
     }
 
     const initialBell=pollBell();
-    await switchView('home');
+    await switchView(initialView);
     await initialBell;
     setInterval(()=>{if(!document.hidden)pollBell();}, 45000);
     document.addEventListener('visibilitychange',()=>{if(!document.hidden)pollBell();});
