@@ -250,6 +250,7 @@ const PNG_1PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfF
     assert.ok(!homeHtml.includes('تمرینت رو دنبال کن'));
     assert.ok(!homeHtml.includes('چرا ارسلان دوجو؟'));
     assert.ok(!homeHtml.includes('همه در یک پنل'));
+    assert.ok(!homeHtml.includes('ساعت کاری') && !homeHtml.includes('ساعات کاری'));
 
     const panelJs = await (await fetch(base + '/panel.js')).text();
     assert.match(panelJs, /new URLSearchParams\(location\.search\)\.get\('view'\)/);
