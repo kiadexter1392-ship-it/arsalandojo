@@ -21,13 +21,20 @@
   const STEP_Z = 70;
 
   /* Martial arts themed cards — 3D rendered images */
-  const CARDS = [
-    { id: 'karate',  title: 'کاراته',    src: (window.UI ? UI.PATH_PREFIX : '') + '/images/card-karate.jpg' },
-    { id: 'crossfit',title: 'کراسفیت',   src: (window.UI ? UI.PATH_PREFIX : '') + '/images/card-crossfit.jpg' },
-    { id: 'boxing',  title: 'بوکس',      src: (window.UI ? UI.PATH_PREFIX : '') + '/images/card-boxing.jpg' },
-    { id:'muaythai',title:'موی تای',src:(window.UI ? UI.PATH_PREFIX : '') + '/images/card-boxing.jpg' },
-    { id: 'gym',     title: 'ژیمناستیک', src: (window.UI ? UI.PATH_PREFIX : '') + '/images/card-gym.jpg' },
+  const CARD_DEFS = [
+    { id: 'karate',   title: 'کاراته',    file: 'card-karate.jpg' },
+    { id: 'crossfit', title: 'کراسفیت',   file: 'card-crossfit.jpg' },
+    { id: 'boxing',   title: 'بوکس',      file: 'card-boxing.jpg' },
+    { id: 'muaythai', title: 'موی تای',   file: 'card-muaythai.jpg' },
+    { id: 'gym',      title: 'ژیمناستیک', file: 'card-gym.jpg' }
   ];
+
+  function buildCards() {
+    var prefix = window.UI && window.UI.PATH_PREFIX ? window.UI.PATH_PREFIX : '';
+    return CARD_DEFS.map(function(c) {
+      return { id: c.id, title: c.title, src: prefix + '/images/' + c.file + '?v=2' };
+    });
+  }
 
   function slot(k) {
     return 'translate3d(' + (k * STEP_X) + 'px,' + (-k * STEP_Y) + 'px,' + (-k * STEP_Z) + 'px) skewY(6deg)';
@@ -39,6 +46,7 @@
     var auto = options.auto || false;
     var every = Math.max(1.5, options.every || 4);
 
+    var CARDS = buildCards();
     var order = CARDS.map(function(c) { return c.id; });
     var els = {};
     var state = { hover: false, drag: null };

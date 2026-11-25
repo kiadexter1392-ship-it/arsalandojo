@@ -13,6 +13,14 @@ const authSession = require('../shared/auth-session');
 const { seedIfEmpty, DEMO } = require('../shared/seed');
 const { JALALI_MONTHS, todayJalali, formatJalali, faNum } = require('../shared/jalali');
 
+function todayISODate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function csvRow(cells) {
+  return cells.map((c) => `"${String(c === null || c === undefined ? '' : c).replace(/"/g, '""')}"`).join(',');
+}
+
 const { coach: PORT, member: MEMBER_PORT } = readPorts();
 const SITE = 'coach';
 const memberUrl = (process.env.MEMBERS_SITE_URL || '').trim();
@@ -255,11 +263,28 @@ app.get('/api/overview', (ctx) => {
   const latestMembers = db.all(
     "SELECT id, full_name, username, belt, avatar_color, join_date, created_at FROM users WHERE verified=1 AND role='member' ORDER BY created_at DESC LIMIT 5"
   );
+  const pendingReceipts = db.get(
+    "SELECT COUNT(*) AS c FROM tuition_receipts r JOIN users u ON u.id = r.user_id WHERE r.status = 'pending' AND u.verified = 1"
+  ).c;
+  const careAlerts = db.listMembers({ active: 1 }).map((m) => {
+    const care = db.memberCareStatus(m.id, j.jy, j.jm, j.jd);
+    return {
+      id: m.id,
+      full_name: m.full_name,
+      username: m.username,
+      discipline: m.discipline || m.style || '',
+      belt: m.belt || '',
+      avatar_color: m.avatar_color,
+      ...care
+    };
+  }).filter((m) => m.needs_absence_followup || m.tuition_status === 'overdue' || m.tuition_status === 'due_soon');
   ctx.json({
     ok: true,
     stats: db.stats(),
+    pendingReceipts,
+    careAlerts,
     today: formatJalali(new Date()),
-    jalali: { year: j.jy, month: j.jm, monthName: JALALI_MONTHS[j.jm - 1] },
+    jalali: { year: j.jy, month: j.jm, day: j.jd, monthName: JALALI_MONTHS[j.jm - 1] },
     activity: db.recentActivity(12),
     doneFeed,
     selfReports,
@@ -275,21 +300,37 @@ app.get('/api/overview', (ctx) => {
 app.get('/api/members', (ctx) => {
   if (!needCoach(ctx)) return;
   const rows = db.listMembers({ q: ctx.query.q, belt: ctx.query.belt });
-  const members = rows.map((m) => {
-    const j = todayJalali();
-    const { rows: pr } = db.progressYear(m.id, j.jy);
-    const filled = pr.filter((r) => r.overall !== null);
-    const last = [...pr].sort((a, b) => b.month - a.month)[0] || null;
-    const pending = db.get('SELECT COUNT(*) AS c FROM plan_assignments WHERE verified=1 AND plan_id IN (SELECT id FROM plans WHERE verified=1) AND user_id = ? AND status != ?', m.id, 'done').c;
-    return {
-      ...db.publicUser(m),
-      avg: filled.length ? Math.round(filled.reduce((s, r) => s + r.overall, 0) / filled.length) : null,
-      last_overall: last ? last.overall : null,
-      last_month: last ? last.month : null,
-      pending
-    };
+  const j = todayJalali();
+  const discFilter = String(ctx.query.discipline || '').trim();
+  const activeFilter = ctx.query.active;
+  const members = rows
+    .filter((m) => {
+      if (discFilter && (m.discipline || m.style || '') !== discFilter) return false;
+      if (activeFilter === '1' && !m.active) return false;
+      if (activeFilter === '0' && m.active) return false;
+      return true;
+    })
+    .map((m) => {
+      const { rows: pr } = db.progressYear(m.id, j.jy);
+      const filled = pr.filter((r) => r.overall !== null);
+      const last = [...pr].sort((a, b) => b.month - a.month)[0] || null;
+      const pending = db.get('SELECT COUNT(*) AS c FROM plan_assignments WHERE verified=1 AND plan_id IN (SELECT id FROM plans WHERE verified=1) AND user_id = ? AND status != ?', m.id, 'done').c;
+      const care = db.memberCareStatus(m.id, j.jy, j.jm, j.jd);
+      return {
+        ...db.publicUser(m),
+        avg: filled.length ? Math.round(filled.reduce((s, r) => s + r.overall, 0) / filled.length) : null,
+        last_overall: last ? last.overall : null,
+        last_month: last ? last.month : null,
+        pending,
+        ...care
+      };
+    });
+  ctx.json({
+    ok: true,
+    members,
+    belts: db.all("SELECT DISTINCT belt FROM users WHERE verified=1 AND role='member' AND belt IS NOT NULL ORDER BY belt").map((r) => r.belt),
+    disciplines: db.all("SELECT DISTINCT COALESCE(discipline, style) AS d FROM users WHERE verified=1 AND role='member' AND COALESCE(discipline, style) IS NOT NULL AND COALESCE(discipline, style) != '' ORDER BY d").map((r) => r.d)
   });
-  ctx.json({ ok: true, members, belts: db.all("SELECT DISTINCT belt FROM users WHERE verified=1 AND role='member' AND belt IS NOT NULL ORDER BY belt").map((r) => r.belt) });
 });
 
 app.post('/api/members', (ctx) => {
@@ -385,6 +426,128 @@ app.post('/api/members/:id/impersonate', (ctx) => {
   db.run('INSERT INTO impersonations (token, user_id, created_at) VALUES (?,?,?)', token, m.id, db.now());
   db.logActivity(u.id, u.full_name, 'پنل شاگرد را مشاهده کرد', m.full_name);
   ctx.json({ ok: true, token });
+});
+
+app.post('/api/members/:id/remind', (ctx) => {
+  const u = needCoach(ctx);
+  if (!u) return;
+  const m = db.findById(ctx.params.id);
+  if (!m || m.role !== 'member') return bad(ctx, 'شاگرد پیدا نشد', 404);
+  const b = ctx.body || {};
+  const kind = ['tuition', 'absence', 'custom'].includes(b.kind) ? b.kind : 'tuition';
+  const j = todayJalali();
+  const defaults = {
+    tuition: {
+      type: 'reminder_tuition',
+      title: `یادآوری تمدید شهریه ${JALALI_MONTHS[j.jm - 1]}`,
+      body: `سلام ${m.full_name} عزیز، لطفاً پس از واریز شهریه ماه ${JALALI_MONTHS[j.jm - 1]} ${faNum(j.jy)}، فیش پرداختی را در بخش «پرداخت شهریه» ثبت کنید.`
+    },
+    absence: {
+      type: 'reminder_absence',
+      title: 'پیگیری غیبت در کلاس‌های دوجو',
+      body: `سلام ${m.full_name} عزیز، در چند جلسه اخیر غایب بودید. امیدواریم سلامت باشید؛ برای هماهنگی تمرین جایگزین یا زمان بازگشت با مربی در ارتباط باشید.`
+    },
+    custom: {
+      type: 'message',
+      title: 'پیام یادآوری از مربی',
+      body: 'لطفاً وضعیت تمرین و برنامه خود را در پنل بررسی کنید.'
+    }
+  };
+  const title = sanitize(String(b.title || defaults[kind].title).trim()).slice(0, 140);
+  const body = sanitize(String(b.body || defaults[kind].body).trim()).slice(0, 600);
+  if (!title) return bad(ctx, 'عنوان یادآوری الزامی است');
+  db.pushNotification(m.id, { type: defaults[kind].type, title, body });
+  db.logActivity(u.id, u.full_name, 'یادآوری ارسال کرد', `${m.full_name} — ${title}`);
+  ctx.json({ ok: true });
+});
+
+/* --------------------------- حضور و غیاب و شهریه -------------------------- */
+
+app.get('/api/attendance', (ctx) => {
+  if (!needCoach(ctx)) return;
+  const date = String(ctx.query.date || todayISODate()).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return bad(ctx, 'تاریخ معتبر نیست');
+  const rows = db.listAttendanceByDate(date);
+  const byUser = new Map(rows.map((r) => [r.user_id, r]));
+  const j = todayJalali();
+  const members = db.listMembers({ active: 1 }).map((m) => {
+    const rec = byUser.get(m.id);
+    const care = db.memberCareStatus(m.id, j.jy, j.jm, j.jd);
+    return {
+      id: m.id,
+      full_name: m.full_name,
+      username: m.username,
+      discipline: m.discipline || m.style || '',
+      belt: m.belt || '',
+      avatar_color: m.avatar_color,
+      status: rec ? rec.status : null,
+      note: rec ? (rec.note || '') : '',
+      consecutive_absences: care.consecutive_absences,
+      tuition_status: care.tuition_status
+    };
+  });
+  ctx.json({ ok: true, date, members });
+});
+
+app.post('/api/attendance', (ctx) => {
+  const u = needCoach(ctx);
+  if (!u) return;
+  const b = ctx.body || {};
+  const session_date = String(b.session_date || todayISODate()).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(session_date)) return bad(ctx, 'تاریخ جلسه معتبر نیست');
+  if (session_date > todayISODate()) return bad(ctx, 'امکان ثبت حضور و غیاب برای تاریخ آینده وجود ندارد');
+
+  const entries = Array.isArray(b.entries)
+    ? b.entries
+    : (b.user_id ? [{ user_id: b.user_id, status: b.status, note: b.note }] : []);
+  if (!entries.length) return bad(ctx, 'حداقل یک وضعیت حضور ارسال کنید');
+
+  const saved = [];
+  for (const item of entries) {
+    const m = db.findById(item.user_id);
+    if (!m || m.role !== 'member') continue;
+    const rec = db.recordAttendance({
+      user_id: m.id,
+      session_date,
+      status: item.status,
+      note: item.note ? sanitize(String(item.note)).slice(0, 300) : null
+    }, u.id);
+    saved.push(rec);
+  }
+  if (!saved.length) return bad(ctx, 'شاگرد معتبری در لیست یافت نشد', 404);
+  db.logActivity(u.id, u.full_name, 'حضور و غیاب را ثبت کرد', `${session_date} (${faNum(saved.length)} نفر)`);
+  ctx.json({ ok: true, saved: saved.length, date: session_date });
+});
+
+app.get('/api/tuition/receipts', (ctx) => {
+  if (!needCoach(ctx)) return;
+  const status = ['pending', 'approved', 'rejected'].includes(ctx.query.status) ? ctx.query.status : undefined;
+  const year = ctx.query.year ? Number(ctx.query.year) : undefined;
+  const month = ctx.query.month ? Number(ctx.query.month) : undefined;
+  const receipts = db.listTuitionReceipts({ status, year, month, limit: 150 });
+  const pendingCount = db.get("SELECT COUNT(*) AS c FROM tuition_receipts r JOIN users u ON u.id = r.user_id WHERE r.status = 'pending' AND u.verified = 1").c;
+  ctx.json({ ok: true, receipts, pendingCount });
+});
+
+app.post('/api/tuition/receipts/:id/review', (ctx) => {
+  const u = needCoach(ctx);
+  if (!u) return;
+  const b = ctx.body || {};
+  const status = b.status;
+  if (!['approved', 'rejected'].includes(status)) return bad(ctx, 'وضعیت بررسی باید تایید یا رد باشد');
+  const coach_note = b.coach_note ? sanitize(String(b.coach_note).trim()).slice(0, 500) : '';
+  const updated = db.reviewTuitionReceipt(ctx.params.id, { status, coach_note }, u.id);
+  if (!updated) return bad(ctx, 'فیش مورد نظر پیدا نشد', 404);
+
+  const member = db.findById(updated.user_id);
+  const periodLabel = `${JALALI_MONTHS[updated.month - 1]} ${faNum(updated.year)}`;
+  db.pushNotification(updated.user_id, {
+    type: 'tuition_review',
+    title: status === 'approved' ? `فیش شهریه ${periodLabel} تایید شد ✓` : `فیش شهریه ${periodLabel} تایید نشد`,
+    body: coach_note || (status === 'approved' ? `پرداخت با کد پیگیری ${updated.tracking_code} تایید گردید.` : 'لطفاً جزئیات فیش را بررسی و مجدداً ارسال کنید.')
+  });
+  db.logActivity(u.id, u.full_name, status === 'approved' ? 'فیش شهریه را تایید کرد' : 'فیش شهریه را رد کرد', `${member ? member.full_name : 'شاگرد'} — ${periodLabel}`);
+  ctx.json({ ok: true, receipt: updated });
 });
 
 /* -------------------------------- تمرینات -------------------------------- */
@@ -562,9 +725,40 @@ app.get('/api/years', (ctx) => {
 app.get('/api/export/progress', (ctx) => {
   if (!needCoach(ctx)) return;
   const year = Number(ctx.query.year) || todayJalali().jy;
+  if (ctx.query.detail === 'full') {
+    const members = db.listMembers();
+    const header = ['نام شاگرد', 'رشته', 'کمربند', 'سال', 'ماه', 'شماره ماه', 'جلسات', 'استقامت', 'قدرت', 'تکنیک', 'انعطاف', 'انضباط', 'وزن (کیلوگرم)', 'نمره کل', 'یادداشت مربی'];
+    const lines = [csvRow(header)];
+    for (const m of members) {
+      const { rows } = db.progressYear(m.id, year);
+      for (const r of rows) {
+        lines.push(csvRow([
+          m.full_name,
+          m.discipline || m.style || '-',
+          m.belt || '-',
+          year,
+          JALALI_MONTHS[r.month - 1] || String(r.month),
+          r.month,
+          r.sessions ?? '-',
+          r.endurance ?? '-',
+          r.strength ?? '-',
+          r.technique ?? '-',
+          r.flexibility ?? '-',
+          r.discipline ?? '-',
+          r.weight_kg ?? '-',
+          r.overall ?? '-',
+          r.note || ''
+        ]));
+      }
+    }
+    const csv = '\uFEFF' + lines.join('\r\n');
+    ctx.res.setHeader('Content-Disposition', `attachment; filename="progress-full-${year}.csv"`);
+    ctx.text(csv, 200, 'text/csv; charset=utf-8');
+    return;
+  }
   const rows = db.clubMatrix(year);
   const header = ['نام شاگرد', 'کمربند', ...JALALI_MONTHS.map((m) => m + ' ' + year), 'میانگین سال'];
-  const lines = [header.join(',')];
+  const lines = [csvRow(header)];
   for (const r of rows) {
     const cells = [r.member.full_name, r.member.belt || '-'];
     for (let mth = 1; mth <= 12; mth += 1) {
@@ -572,10 +766,74 @@ app.get('/api/export/progress', (ctx) => {
       cells.push(p && p.overall !== null ? String(p.overall) : '-');
     }
     cells.push(r.avg === null ? '-' : String(r.avg));
-    lines.push(cells.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','));
+    lines.push(csvRow(cells));
   }
   const csv = '\uFEFF' + lines.join('\r\n');
   ctx.res.setHeader('Content-Disposition', `attachment; filename="progress-${year}.csv"`);
+  ctx.text(csv, 200, 'text/csv; charset=utf-8');
+});
+
+app.get('/api/export/members', (ctx) => {
+  if (!needCoach(ctx)) return;
+  const j = todayJalali();
+  const tuitionLabel = { paid: 'پرداخت شده', pending: 'در انتظار تایید', due_soon: 'نزدیک سررسید', overdue: 'معوق', unpaid: 'ثبت نشده' };
+  const rows = db.listMembers();
+  const header = ['نام شاگرد', 'نام کاربری', 'رشته', 'کمربند', 'موبایل', 'وضعیت حساب', `میانگین ${j.jy}`, 'تمرین باز', `شهریه ${JALALI_MONTHS[j.jm - 1]}`, 'غیبت متوالی', 'نیاز به پیگیری'];
+  const lines = [csvRow(header)];
+  for (const m of rows) {
+    const { rows: pr } = db.progressYear(m.id, j.jy);
+    const filled = pr.filter((r) => r.overall !== null);
+    const avg = filled.length ? Math.round(filled.reduce((s, r) => s + r.overall, 0) / filled.length) : '-';
+    const pending = db.get('SELECT COUNT(*) AS c FROM plan_assignments WHERE verified=1 AND plan_id IN (SELECT id FROM plans WHERE verified=1) AND user_id = ? AND status != ?', m.id, 'done').c;
+    const care = db.memberCareStatus(m.id, j.jy, j.jm, j.jd);
+    const followReasons = [];
+    if (care.needs_absence_followup) followReasons.push('غیبت متوالی');
+    if (care.tuition_status === 'overdue' || care.tuition_status === 'due_soon') followReasons.push('شهریه');
+    lines.push(csvRow([
+      m.full_name,
+      m.username,
+      m.discipline || m.style || '-',
+      m.belt || '-',
+      m.phone || '-',
+      m.active ? 'فعال' : 'غیرفعال',
+      avg,
+      pending,
+      tuitionLabel[care.tuition_status] || care.tuition_status,
+      care.consecutive_absences,
+      followReasons.length ? followReasons.join(' + ') : 'ندارد'
+    ]));
+  }
+  const csv = '\uFEFF' + lines.join('\r\n');
+  ctx.res.setHeader('Content-Disposition', `attachment; filename="members-${j.jy}-${j.jm}.csv"`);
+  ctx.text(csv, 200, 'text/csv; charset=utf-8');
+});
+
+app.get('/api/export/tuition', (ctx) => {
+  if (!needCoach(ctx)) return;
+  const j = todayJalali();
+  const year = ctx.query.year ? Number(ctx.query.year) : undefined;
+  const statusLabel = { pending: 'در انتظار بررسی', approved: 'تایید شده', rejected: 'رد شده' };
+  const receipts = db.listTuitionReceipts({ year, limit: 500 });
+  const header = ['نام شاگرد', 'رشته', 'کمربند', 'سال', 'ماه', 'مبلغ (تومان)', '۴ رقم کارت', 'کد پیگیری', 'وضعیت', 'یادداشت شاگرد', 'پاسخ مربی', 'تاریخ ثبت'];
+  const lines = [csvRow(header)];
+  for (const r of receipts) {
+    lines.push(csvRow([
+      r.full_name,
+      r.discipline || '-',
+      r.belt || '-',
+      r.year,
+      JALALI_MONTHS[r.month - 1] || r.month,
+      r.amount_toman,
+      r.card_last4 || '-',
+      r.tracking_code,
+      statusLabel[r.status] || r.status,
+      r.note || '',
+      r.coach_note || '',
+      r.created_at
+    ]));
+  }
+  const csv = '\uFEFF' + lines.join('\r\n');
+  ctx.res.setHeader('Content-Disposition', `attachment; filename="tuition-receipts-${year || j.jy}.csv"`);
   ctx.text(csv, 200, 'text/csv; charset=utf-8');
 });
 

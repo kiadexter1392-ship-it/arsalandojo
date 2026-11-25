@@ -18,6 +18,10 @@
     view: 'overview',
     memberQuery: '',
     memberBelt: '',
+    memberDiscipline: '',
+    memberActive: '',
+    memberFollowup: '',
+    careTab: 'attendance',
     progressMode: 'member',
     progressUserId: null,
     progressYear: null,
@@ -27,6 +31,7 @@
   const TITLES = {
     overview: 'داشبورد',
     members: 'شاگردان',
+    care: 'حضور و غیاب و شهریه',
     plans: 'تمرینات',
     progress: 'جدول پیشرفت',
     news: 'اطلاع‌رسانی',
@@ -84,6 +89,17 @@
     const cnt = document.getElementById('cntMembers');
     cnt.textContent = fa(MEMBERS.length);
     cnt.classList.remove('hidden');
+
+    const cntCare = document.getElementById('cntCare');
+    if (cntCare) {
+      const careCount = MEMBERS.filter((x) => x.active && (x.pending_receipts > 0 || x.needs_absence_followup || x.tuition_status === 'overdue')).length;
+      if (careCount > 0) {
+        cntCare.textContent = fa(careCount);
+        cntCare.classList.remove('hidden');
+      } else {
+        cntCare.classList.add('hidden');
+      }
+    }
   }
 
   function bindNav() {
@@ -109,6 +125,12 @@
     try {
       if (view === 'overview') await renderOverview(box);
       else if (view === 'members') await renderMembers(box);
+      else if (view === 'care' && window.CoachCare) await window.CoachCare.render(box, {
+        tab: state.careTab,
+        members: MEMBERS,
+        onTabChange: (t) => { state.careTab = t; },
+        onDataChanged: refreshBase
+      });
       else if (view === 'plans') await renderPlans(box);
       else if (view === 'progress') await renderProgress(box);
       else if (view === 'news') await renderNews(box);
@@ -136,14 +158,40 @@
     }
     const maxAvg = Math.max(10, ...avgByMonth);
 
+    const alerts = d.careAlerts || [];
+    const pendingRecs = Number(d.pendingReceipts || 0);
+
     box.innerHTML = `
       <div class="stack">
         <div class="grid-4">
           ${statTile('شاگردان فعال', fa(d.stats.activeMembers), `از ${fa(d.stats.members)} عضو ثبت‌شده`, 'var(--red)')}
           ${statTile('تمرین ارسال‌شده', fa(d.stats.plans), `${fa(d.stats.done)} مورد تکمیل شده`, 'var(--gold)')}
           ${statTile('در انتظار انجام', fa(d.stats.pending), 'تمرین باز بین شاگردان', 'var(--blue)')}
-          ${statTile('پیشرفت این ماه', fa(d.stats.thisMonth), `${fa(d.jalali.monthName)} ${fa(d.jalali.year)} ثبت شده`, 'var(--green)')}
+          ${statTile('فیش‌های در انتظار تایید', fa(pendingRecs), alerts.length ? `${fa(alerts.length)} مورد نیازمند پیگیری` : 'همه بررسی شده', pendingRecs ? 'var(--red)' : 'var(--green)')}
         </div>
+
+        ${(pendingRecs || alerts.length) ? `
+          <div class="card">
+            <div class="card-head wrap">
+              <div class="card-title"><span class="dot" style="background:var(--red);box-shadow:0 0 10px var(--red)"></span> پیگیری سریع حضور و شهریه</div>
+              <div class="row wrap" style="gap:8px">
+                <button type="button" class="btn sm ghost" id="ovOpenAtt">ثبت حضور و غیاب امروز</button>
+                <button type="button" class="btn sm primary" id="ovOpenTuition">بررسی فیش‌ها (${fa(pendingRecs)})</button>
+              </div>
+            </div>
+            ${alerts.length ? alerts.slice(0, 6).map((m) => `
+              <div class="list-item">
+                ${avatar(m, 'sm')}
+                <div class="grow">
+                  <div class="title">${esc(m.full_name)} <span class="tiny muted">${esc(m.discipline || m.belt || '')}</span></div>
+                  <div class="row wrap" style="gap:6px;margin-top:4px">
+                    ${m.needs_absence_followup ? `<span class="badge red">${fa(m.consecutive_absences)} غیبت متوالی</span>` : ''}
+                    ${m.tuition_status === 'overdue' ? '<span class="badge red">شهریه معوق</span>' : m.tuition_status === 'due_soon' ? '<span class="badge gold">نزدیک سررسید شهریه</span>' : ''}
+                  </div>
+                </div>
+                <button type="button" class="btn sm ghost" data-ov-remind="${m.id}" data-ov-kind="${m.needs_absence_followup ? 'absence' : 'tuition'}">ارسال یادآوری</button>
+              </div>`).join('') : '<p class="tiny muted">فیش جدید در انتظار تایید مربی قرار دارد.</p>'}
+          </div>` : ''}
 
         <div class="split">
           <div class="stack">
@@ -214,6 +262,26 @@
         </div>
       </div>`;
 
+    box.querySelector('#ovOpenAtt')?.addEventListener('click', () => {
+      state.careTab = 'attendance';
+      switchView('care');
+    });
+    box.querySelector('#ovOpenTuition')?.addEventListener('click', () => {
+      state.careTab = 'tuition';
+      switchView('care');
+    });
+    box.querySelectorAll('[data-ov-remind]').forEach((b) => {
+      b.addEventListener('click', async () => {
+        b.disabled = true;
+        try {
+          await api(`/api/members/${b.dataset.ovRemind}/remind`, { method: 'POST', body: { kind: b.dataset.ovKind } });
+          toast('یادآوری برای شاگرد ارسال شد ✓', 'ok');
+        } catch (err) {
+          toast(err.message, 'warn');
+          b.disabled = false;
+        }
+      });
+    });
     box.querySelectorAll('[data-open-member]').forEach((b) => {
       b.addEventListener('click', () => memberDetail(Number(b.dataset.openMember)));
     });
@@ -231,6 +299,15 @@
 
   async function renderMembers(box) {
     const belts = [...new Set(MEMBERS.map((m) => m.belt).filter(Boolean))];
+    const disciplines = [...new Set(MEMBERS.map((m) => m.discipline || m.style).filter(Boolean))];
+    const tuitionLabels = (window.CoachCare && window.CoachCare.TUITION_STATUS) || {
+      paid: { label: 'پرداخت‌شده', cls: 'green' },
+      pending: { label: 'فیش در انتظار', cls: 'gold' },
+      due_soon: { label: 'نزدیک سررسید', cls: 'gold' },
+      overdue: { label: 'معوق', cls: 'red' },
+      unpaid: { label: 'ثبت‌نشده', cls: 'dark' }
+    };
+
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
@@ -238,12 +315,28 @@
           <div class="row wrap">
             <div class="search">
               <span class="ic">⌕</span>
-              <input id="memberSearch" type="text" placeholder="جستجوی نام یا نام کاربری" value="${esc(state.memberQuery)}" style="width:220px">
+              <input id="memberSearch" type="text" placeholder="جستجوی نام، نام کاربری یا موبایل" value="${esc(state.memberQuery)}" style="width:210px">
             </div>
-            <select id="beltFilter" style="width:150px">
+            <select id="discFilter" style="width:135px">
+              <option value="">همه رشته‌ها</option>
+              ${disciplines.map((d) => `<option value="${esc(d)}" ${state.memberDiscipline === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}
+            </select>
+            <select id="beltFilter" style="width:135px">
               <option value="">همه کمربندها</option>
               ${belts.map((b) => `<option value="${esc(b)}" ${state.memberBelt === b ? 'selected' : ''}>${esc(b)}</option>`).join('')}
             </select>
+            <select id="activeFilter" style="width:120px">
+              <option value="">همه وضعیت‌ها</option>
+              <option value="1" ${state.memberActive === '1' ? 'selected' : ''}>فقط فعال</option>
+              <option value="0" ${state.memberActive === '0' ? 'selected' : ''}>غیرفعال</option>
+            </select>
+            <select id="followupFilter" style="width:155px">
+              <option value="">همه پیگیری‌ها</option>
+              <option value="tuition" ${state.memberFollowup === 'tuition' ? 'selected' : ''}>پیگیری شهریه</option>
+              <option value="absence" ${state.memberFollowup === 'absence' ? 'selected' : ''}>غیبت متوالی (۲+)</option>
+              <option value="any" ${state.memberFollowup === 'any' ? 'selected' : ''}>نیازمند هر پیگیری</option>
+            </select>
+            <button class="btn sm ghost" id="exportMembersCsv">خروجی اکسل (CSV)</button>
             <button class="btn primary" id="addMemberBtn">+ ثبت شاگرد جدید</button>
           </div>
         </div>
@@ -252,18 +345,28 @@
 
     const draw = () => {
       const q = state.memberQuery.trim().toLowerCase();
-      const rows = MEMBERS.filter((m) =>
-        (!q || m.full_name.toLowerCase().includes(q) || m.username.includes(q) || (m.phone || '').includes(q)) &&
-        (!state.memberBelt || m.belt === state.memberBelt));
+      const rows = MEMBERS.filter((m) => {
+        if (q && !m.full_name.toLowerCase().includes(q) && !m.username.includes(q) && !(m.phone || '').includes(q)) return false;
+        if (state.memberBelt && m.belt !== state.memberBelt) return false;
+        if (state.memberDiscipline && (m.discipline || m.style || '') !== state.memberDiscipline) return false;
+        if (state.memberActive === '1' && !m.active) return false;
+        if (state.memberActive === '0' && m.active) return false;
+        if (state.memberFollowup === 'tuition' && !m.needs_tuition_followup) return false;
+        if (state.memberFollowup === 'absence' && !m.needs_absence_followup) return false;
+        if (state.memberFollowup === 'any' && !m.needs_tuition_followup && !m.needs_absence_followup) return false;
+        return true;
+      });
       document.getElementById('memberCount').textContent = fa(rows.length) + ' نفر';
       document.getElementById('membersTable').innerHTML = rows.length ? `
         <div class="table-wrap"><table class="data">
           <thead><tr>
-            <th>شاگرد</th><th>کمربند</th><th>سن</th><th>تماس</th>
-            <th>میانگین ${fa(CFG.jalaliYear)}</th><th>تمرین باز</th><th>عملیات</th>
+            <th>شاگرد</th><th>رشته / کمربند</th><th>تماس</th>
+            <th>میانگین ${fa(CFG.jalaliYear)}</th><th>وضعیت شهریه و حضور</th><th>تمرین باز</th><th>عملیات</th>
           </tr></thead>
           <tbody>
-            ${rows.map((m) => `<tr>
+            ${rows.map((m) => {
+              const tInfo = tuitionLabels[m.tuition_status] || tuitionLabels.unpaid;
+              return `<tr>
               <td>
                 <div class="row" style="gap:10px">
                   ${avatar(m)}
@@ -273,18 +376,32 @@
                   </div>
                 </div>
               </td>
-              <td><span class="badge gold">${esc(m.belt || '—')}</span></td>
-              <td>${m.age ? fa(m.age) : '—'}</td>
-              <td class="en tiny">${esc(m.phone || '—')}</td>
-              <td>${m.avg === null ? '<span class="muted tiny">ثبت نشده</span>' : `<span class="heat ${heatClass(m.avg)}">${fa(m.avg)}</span>`}</td>
-              <td>${m.pending ? `<span class="badge red">${fa(m.pending)}</span>` : '<span class="badge green">۰</span>'}</td>
               <td>
-                <div class="row" style="gap:6px">
-                  <button class="btn sm" data-view-member="${m.id}">پروفایل</button>
-                  <button class="btn sm ghost" data-progress-member="${m.id}">جدول</button>
+                <div class="row wrap" style="gap:4px">
+                  ${m.discipline || m.style ? `<span class="badge blue">${esc(m.discipline || m.style)}</span>` : ''}
+                  <span class="badge gold">${esc(m.belt || '—')}</span>
                 </div>
               </td>
-            </tr>`).join('')}
+              <td class="en tiny">${esc(m.phone || '—')}</td>
+              <td>${m.avg === null ? '<span class="muted tiny">ثبت نشده</span>' : `<span class="heat ${heatClass(m.avg)}">${fa(m.avg)}</span>`}</td>
+              <td>
+                <div class="row wrap" style="gap:4px">
+                  <span class="badge ${tInfo.cls}">${esc(tInfo.label)}</span>
+                  ${m.consecutive_absences >= 2 ? `<span class="badge red">${fa(m.consecutive_absences)} غیبت</span>` : ''}
+                </div>
+              </td>
+              <td>${m.pending ? `<span class="badge red">${fa(m.pending)}</span>` : '<span class="badge green">۰</span>'}</td>
+              <td>
+                <div class="row wrap" style="gap:6px">
+                  <button class="btn sm" data-view-member="${m.id}">پروفایل</button>
+                  <button class="btn sm ghost" data-progress-member="${m.id}">جدول</button>
+                  ${(m.needs_absence_followup || m.tuition_status === 'overdue' || m.tuition_status === 'due_soon' || m.tuition_status === 'unpaid')
+                    ? `<button class="btn sm ghost" data-quick-remind="${m.id}" data-remind-kind="${m.needs_absence_followup ? 'absence' : 'tuition'}">یادآوری</button>`
+                    : ''}
+                </div>
+              </td>
+            </tr>`;
+            }).join('')}
           </tbody>
         </table></div>` : emptyHTML('شاگردی با این مشخصات پیدا نشد');
 
@@ -293,6 +410,16 @@
         state.progressUserId = Number(b.dataset.progressMember);
         state.progressMode = 'member';
         switchView('progress');
+      }));
+      box.querySelectorAll('[data-quick-remind]').forEach((b) => b.addEventListener('click', async () => {
+        b.disabled = true;
+        try {
+          await api(`/api/members/${b.dataset.quickRemind}/remind`, { method: 'POST', body: { kind: b.dataset.remindKind } });
+          toast('یادآوری ارسال شد ✓', 'ok');
+        } catch (err) {
+          toast(err.message, 'warn');
+          b.disabled = false;
+        }
       }));
     };
 
@@ -304,9 +431,12 @@
       clearTimeout(t);
       t = setTimeout(draw, 180);
     });
-    document.getElementById('beltFilter').addEventListener('change', (e) => {
-      state.memberBelt = e.target.value;
-      draw();
+    document.getElementById('discFilter').addEventListener('change', (e) => { state.memberDiscipline = e.target.value; draw(); });
+    document.getElementById('beltFilter').addEventListener('change', (e) => { state.memberBelt = e.target.value; draw(); });
+    document.getElementById('activeFilter').addEventListener('change', (e) => { state.memberActive = e.target.value; draw(); });
+    document.getElementById('followupFilter').addEventListener('change', (e) => { state.memberFollowup = e.target.value; draw(); });
+    document.getElementById('exportMembersCsv').addEventListener('click', () => {
+      window.open(PATH_PREFIX + '/api/export/members', '_blank');
     });
     document.getElementById('addMemberBtn').addEventListener('click', () => memberForm());
   }
@@ -783,7 +913,8 @@
               <button class="chip ${state.progressMode === 'club' ? 'active' : ''}" data-mode="club">نمای کلی باشگاه (سالانه)</button>
             </div>
             <select id="yearSel" style="width:120px">${years.map((y) => `<option value="${y}" ${y === state.progressYear ? 'selected' : ''}>سال ${fa(y)}</option>`).join('')}</select>
-            <button class="btn sm" id="exportCsv">خروجی اکسل (CSV)</button>
+            <button class="btn sm" id="exportCsv">خروجی سالانه (CSV)</button>
+            <button class="btn sm ghost" id="exportFullCsv">خروجی کامل شاخص‌ها (CSV)</button>
           </div>
         </div>
         <div id="progressBody">${loadingHTML()}</div>
@@ -799,6 +930,9 @@
     });
     document.getElementById('exportCsv').addEventListener('click', () => {
       window.open(PATH_PREFIX + '/api/export/progress?year=' + state.progressYear, '_blank');
+    });
+    document.getElementById('exportFullCsv').addEventListener('click', () => {
+      window.open(PATH_PREFIX + '/api/export/progress?detail=full&year=' + state.progressYear, '_blank');
     });
 
     if (state.progressMode === 'club') await renderClubMatrix(document.getElementById('progressBody'));

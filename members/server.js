@@ -11,7 +11,7 @@ const { createServer, rateLimit, sanitize } = require('../shared/server');
 const db = require('../shared/db');
 const authSession = require('../shared/auth-session');
 const { seedIfEmpty, DEMO } = require('../shared/seed');
-const { JALALI_MONTHS, todayJalali, formatJalali, faNum } = require('../shared/jalali');
+const { JALALI_MONTHS, todayJalali, formatJalali, faNum, enNum } = require('../shared/jalali');
 
 const { member: PORT, coach: COACH_PORT } = readPorts();
 const SITE = 'member';
@@ -394,9 +394,11 @@ app.get('/api/me', (ctx) => {
     ok: true,
     user: db.publicUser(u),
     unread: db.unreadCount(u.id),
+    unreadAnnouncements: db.announcementsFor(u.id).filter((a) => !a.read).length,
     pending: db.get('SELECT COUNT(*) AS c FROM plan_assignments WHERE verified=1 AND plan_id IN (SELECT id FROM plans WHERE verified=1) AND user_id = ? AND status != ?', u.id, 'done').c,
     today: formatJalali(new Date()),
-    jalali: { year: j.jy, month: j.jm, monthName: JALALI_MONTHS[j.jm - 1] }
+    jalali: { year: j.jy, month: j.jm, day: j.jd, monthName: JALALI_MONTHS[j.jm - 1] },
+    care: db.memberCareStatus(u.id, j.jy, j.jm, j.jd)
   });
 });
 
@@ -512,7 +514,90 @@ app.post('/api/notifications/read', (ctx) => {
   const u = needMember(ctx);
   if (!u) return;
   db.markNotificationsRead(u.id);
-  ctx.json({ ok: true });
+  ctx.json({ ok: true, unread: 0 });
+});
+
+app.post('/api/notifications/:id/read', (ctx) => {
+  const u = needMember(ctx);
+  if (!u) return;
+  const changed = db.markNotificationRead(ctx.params.id, u.id);
+  ctx.json({ ok: true, changed, unread: db.unreadCount(u.id) });
+});
+
+/* -------------------------- فیش پرداخت شهریه -------------------------- */
+
+app.get('/api/tuition/receipts', (ctx) => {
+  const u = needMember(ctx);
+  if (!u) return;
+  const j = todayJalali();
+  ctx.json({
+    ok: true,
+    receipts: db.listTuitionReceipts({ user_id: u.id, limit: 30 }),
+    currentPeriod: { year: j.jy, month: j.jm, day: j.jd, monthName: JALALI_MONTHS[j.jm - 1] },
+    care: db.memberCareStatus(u.id, j.jy, j.jm, j.jd)
+  });
+});
+
+app.post('/api/tuition/receipts', (ctx) => {
+  const u = needMember(ctx);
+  if (!u) return;
+  if (u.impersonated) return bad(ctx, 'برای ارسال فیش باید مستقیماً وارد حساب خود شوید', 403);
+  const b = ctx.body || {};
+  const j = todayJalali();
+  const year = b.year === undefined || b.year === '' ? j.jy : Number(enNum(b.year));
+  const month = b.month === undefined || b.month === '' ? j.jm : Number(enNum(b.month));
+  const amountRaw = enNum(String(b.amount_toman || '').replace(/[,\s٬]/g, ''));
+  const amount_toman = Number(amountRaw);
+  const tracking_code = sanitize(enNum(String(b.tracking_code || '').trim())).slice(0, 64);
+  const cardLast4Raw = b.card_last4 ? enNum(String(b.card_last4).trim()) : '';
+
+  if (!Number.isInteger(year) || year < 1300 || year > 1600 || !Number.isInteger(month) || month < 1 || month > 12) {
+    return bad(ctx, 'سال و ماه انتخابی معتبر نیست');
+  }
+  if (!Number.isInteger(amount_toman) || amount_toman < 1000 || amount_toman > 500000000) {
+    return bad(ctx, 'مبلغ واریزی را به تومان و به شکل صحیح وارد کنید');
+  }
+  if (tracking_code.length < 3) {
+    return bad(ctx, 'شماره پیگیری یا مرجع واریز باید حداقل ۳ کاراکتر باشد');
+  }
+  if (cardLast4Raw && !/^\d{4}$/.test(cardLast4Raw)) {
+    return bad(ctx, '۴ رقم آخر کارت مبدأ باید دقیقاً ۴ عدد باشد');
+  }
+
+  let receipt_image = null;
+  if (b.receipt_image !== undefined && b.receipt_image !== null && String(b.receipt_image).trim() !== '') {
+    const img = String(b.receipt_image).trim();
+    if (img.length > 1800000) {
+      return bad(ctx, 'حجم تصویر فیش نباید بیشتر از ۱.۲ مگابایت باشد');
+    }
+    if (!/^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/.test(img)) {
+      return bad(ctx, 'فرمت تصویر فیش مجاز نیست؛ فقط PNG، JPG یا WEBP مجاز است');
+    }
+    receipt_image = img;
+  }
+
+  const note = b.note ? sanitize(String(b.note).trim()).slice(0, 500) : null;
+  const receipt = db.createTuitionReceipt({
+    user_id: u.id,
+    year,
+    month,
+    amount_toman,
+    card_last4: cardLast4Raw || null,
+    tracking_code,
+    receipt_image,
+    note
+  });
+
+  const amountFa = faNum(amount_toman.toLocaleString('en-US'));
+  for (const coach of db.all("SELECT id FROM users WHERE role = 'coach' AND active = 1")) {
+    db.pushNotification(coach.id, {
+      type: 'tuition',
+      title: `فیش شهریه جدید از ${u.full_name}`,
+      body: `${JALALI_MONTHS[month - 1]} ${faNum(year)} — ${amountFa} تومان (پیگیری: ${tracking_code})`
+    });
+  }
+  db.logActivity(u.id, u.full_name, 'فیش شهریه ثبت کرد', `${JALALI_MONTHS[month - 1]} ${year}`);
+  ctx.json({ ok: true, receipt }, 201);
 });
 
 app.get('/api/club', (ctx) => {

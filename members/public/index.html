@@ -15,7 +15,7 @@
   <link rel="apple-touch-icon" href="/ui/icons/icon-192.png">
   <link rel="manifest" href="/manifest.json">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
-  <link rel="stylesheet" href="/ui/style.css?v=purple-1">
+  <link rel="stylesheet" href="/ui/style.css?v=purple-2">
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -83,7 +83,7 @@
         <div class="bank-face bank-back-male bank-back">
           <div class="stripe"></div>
           <div class="label">شماره کارت</div>
-          <div class="number">6219 8619 3898 6279</div>
+          <div class="number" dir="ltr">6219 8619 3898 6279</div>
           <button class="bank-copy" onclick="event.stopPropagation();doCopy(this,'6219861938986279')" aria-label="کپی شماره کارت"><span>📋</span> کپی</button>
           <div class="small-name">نوید احمدی — آقایان</div>
         </div>
@@ -102,7 +102,7 @@
         <div class="bank-face bank-back-female bank-back">
           <div class="stripe"></div>
           <div class="label">شماره کارت</div>
-          <div class="number">6219 8619 0341 7334</div>
+          <div class="number" dir="ltr">6219 8619 0341 7334</div>
           <button class="bank-copy" onclick="event.stopPropagation();doCopy(this,'6219861903417334')" aria-label="کپی شماره کارت"><span>📋</span> کپی</button>
           <div class="small-name">خانم توکلی شانجانی — بانوان</div>
         </div>
@@ -230,7 +230,7 @@
 <!-- SCRIPTS -->
 <script src="/ui/jalali.browser.js"></script>
 <script src="/ui/ui.js"></script>
-<script src="/CardStack.js"></script>
+<script src="/CardStack.js?v=2"></script>
 <script src="/OneTimeCode.js"></script>
 <script>
 (function() {
@@ -386,7 +386,7 @@
   /* ── Pricing CardStack (vanilla JS) ── */
   fetch(UI.PATH_PREFIX + '/api/payment').then(function(r) { return r.json(); }).then(function(d) {
     if (!d.ok) return;
-    var cards = d.pricing.slice(0, 6).map(function(p) {
+    var cards = (d.pricing || []).map(function(p) {
       return { discipline: p.discipline, price: p.price };
     });
     var root = document.getElementById('cardStackRoot');

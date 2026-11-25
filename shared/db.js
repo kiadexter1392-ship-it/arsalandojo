@@ -231,9 +231,40 @@ CREATE TABLE IF NOT EXISTS api_keys (
   last_used  TEXT
 );
 
+CREATE TABLE IF NOT EXISTS member_attendance (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  session_date TEXT NOT NULL,
+  status       TEXT NOT NULL CHECK (status IN ('present','absent','excused')),
+  note         TEXT,
+  recorded_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  UNIQUE(user_id, session_date)
+);
+
+CREATE TABLE IF NOT EXISTS tuition_receipts (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  year          INTEGER NOT NULL,
+  month         INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+  amount_toman  INTEGER NOT NULL,
+  card_last4    TEXT,
+  tracking_code TEXT NOT NULL,
+  receipt_image TEXT,
+  note          TEXT,
+  status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+  coach_note    TEXT,
+  reviewed_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at   TEXT,
+  created_at    TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_progress_user ON progress(user_id, year, month);
 CREATE INDEX IF NOT EXISTS idx_assign_user ON plan_assignments(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, read);
+CREATE INDEX IF NOT EXISTS idx_att_user_date ON member_attendance(user_id, session_date DESC);
+CREATE INDEX IF NOT EXISTS idx_receipts_user_ym ON tuition_receipts(user_id, year, month);
 `);
 
 /* -------- مهاجرت: افزودن ستون discipline در صورت نبود -------- */
@@ -621,6 +652,128 @@ function markNotificationsRead(userId) {
   run('UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0', Number(userId));
 }
 
+function markNotificationRead(id, userId) {
+  const res = run('UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?', Number(id), Number(userId));
+  return Number(res.changes) > 0;
+}
+
+/* ----------------------------- حضور و غیاب و شهریه ----------------------------- */
+
+function recordAttendance({ user_id, session_date, status, note }, recorded_by) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(session_date || ''))) {
+    throw Object.assign(new Error('تاریخ جلسه نامعتبر است'), { status: 400 });
+  }
+  if (!['present', 'absent', 'excused'].includes(status)) {
+    throw Object.assign(new Error('وضعیت حضور نامعتبر است'), { status: 400 });
+  }
+  const ts = now();
+  const cleanNote = note ? String(note).trim().slice(0, 300) : null;
+  const existing = get('SELECT id FROM member_attendance WHERE user_id = ? AND session_date = ?', Number(user_id), session_date);
+  if (existing) {
+    run('UPDATE member_attendance SET status = ?, note = ?, recorded_by = ?, updated_at = ? WHERE id = ?',
+      status, cleanNote, recorded_by || null, ts, existing.id);
+    return get('SELECT * FROM member_attendance WHERE id = ?', existing.id);
+  }
+  const info = run(
+    'INSERT INTO member_attendance (user_id, session_date, status, note, recorded_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+    Number(user_id), session_date, status, cleanNote, recorded_by || null, ts, ts
+  );
+  return get('SELECT * FROM member_attendance WHERE id = ?', Number(info.lastInsertRowid));
+}
+
+function listAttendanceByDate(session_date) {
+  return all(
+    `SELECT a.*, u.full_name, u.belt, u.discipline
+     FROM member_attendance a
+     JOIN users u ON u.id = a.user_id
+     WHERE a.session_date = ? AND u.verified = 1 AND u.role = 'member'`,
+    session_date
+  );
+}
+
+function consecutiveAbsences(userId) {
+  const rows = all(
+    'SELECT status FROM member_attendance WHERE user_id = ? ORDER BY session_date DESC LIMIT 12',
+    Number(userId)
+  );
+  let streak = 0;
+  for (const r of rows) {
+    if (r.status === 'absent') streak += 1;
+    else break;
+  }
+  return streak;
+}
+
+function createTuitionReceipt({ user_id, year, month, amount_toman, card_last4, tracking_code, receipt_image, note }) {
+  const ts = now();
+  const info = run(
+    `INSERT INTO tuition_receipts (user_id, year, month, amount_toman, card_last4, tracking_code, receipt_image, note, status, created_at)
+     VALUES (?,?,?,?,?,?,?,?, 'pending', ?)`,
+    Number(user_id), Number(year), Number(month), Number(amount_toman),
+    card_last4 || null, String(tracking_code).trim(), receipt_image || null,
+    note ? String(note).trim().slice(0, 500) : null, ts
+  );
+  return get('SELECT * FROM tuition_receipts WHERE id = ?', Number(info.lastInsertRowid));
+}
+
+function listTuitionReceipts({ user_id, status, year, month, limit = 100 } = {}) {
+  const where = ['u.verified = 1'];
+  const params = [];
+  if (user_id !== undefined) { where.push('r.user_id = ?'); params.push(Number(user_id)); }
+  if (status) { where.push('r.status = ?'); params.push(status); }
+  if (year) { where.push('r.year = ?'); params.push(Number(year)); }
+  if (month) { where.push('r.month = ?'); params.push(Number(month)); }
+  params.push(Number(limit));
+  return all(
+    `SELECT r.*, u.full_name, u.username, u.discipline, u.belt, u.avatar_color,
+            rv.full_name AS reviewer_name
+     FROM tuition_receipts r
+     JOIN users u ON u.id = r.user_id
+     LEFT JOIN users rv ON rv.id = r.reviewed_by
+     WHERE ${where.join(' AND ')}
+     ORDER BY CASE r.status WHEN 'pending' THEN 0 WHEN 'rejected' THEN 1 ELSE 2 END, r.created_at DESC
+     LIMIT ?`,
+    ...params
+  );
+}
+
+function reviewTuitionReceipt(id, { status, coach_note }, coach_id) {
+  if (!['approved', 'rejected'].includes(status)) {
+    throw Object.assign(new Error('وضعیت بررسی نامعتبر است'), { status: 400 });
+  }
+  const existing = get('SELECT * FROM tuition_receipts WHERE id = ?', Number(id));
+  if (!existing) return null;
+  run(
+    'UPDATE tuition_receipts SET status = ?, coach_note = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?',
+    status, coach_note ? String(coach_note).trim().slice(0, 500) : null, coach_id || null, now(), existing.id
+  );
+  return get('SELECT * FROM tuition_receipts WHERE id = ?', existing.id);
+}
+
+function memberCareStatus(userId, jy, jm, jd) {
+  const rows = all(
+    'SELECT id, status, amount_toman, tracking_code, created_at FROM tuition_receipts WHERE user_id = ? AND year = ? AND month = ? ORDER BY created_at DESC',
+    Number(userId), Number(jy), Number(jm)
+  );
+  const approved = rows.find((r) => r.status === 'approved');
+  const pending = rows.find((r) => r.status === 'pending');
+  let tuition_status = 'unpaid';
+  if (approved) tuition_status = 'paid';
+  else if (pending) tuition_status = 'pending';
+  else if (jd > 12) tuition_status = 'overdue';
+  else if (jd >= 9) tuition_status = 'due_soon';
+
+  const absences = consecutiveAbsences(userId);
+  return {
+    tuition_status,
+    consecutive_absences: absences,
+    needs_tuition_followup: tuition_status === 'due_soon' || tuition_status === 'overdue' || tuition_status === 'unpaid',
+    needs_absence_followup: absences >= 2,
+    pending_receipts: rows.filter((r) => r.status === 'pending').length,
+    latest_receipt: rows[0] || null
+  };
+}
+
 /* -------------------------------- تمرینات -------------------------------- */
 
 function createPlan({ author_id, title, body, category, difficulty, starts_on, due_on, duration, targets = [], all_members = false, sport = null }) {
@@ -880,7 +1033,9 @@ module.exports = {
   createSession, sessionUser, renewSession, destroySession, setPassword,
   createAnnouncement, getAnnouncement, listAnnouncements, announcementsFor,
   markAnnouncementRead, updateAnnouncement, deleteAnnouncement,
-  pushNotification, notificationsFor, unreadCount, markNotificationsRead,
+  pushNotification, notificationsFor, unreadCount, markNotificationsRead, markNotificationRead,
+  recordAttendance, listAttendanceByDate, consecutiveAbsences,
+  createTuitionReceipt, listTuitionReceipts, reviewTuitionReceipt, memberCareStatus,
   createPlan, getPlan, listPlans, updatePlan, deletePlan, plansForUser, setAssignmentStatus,
   METRIC_KEYS, computeOverall, progressRow, progressYear, saveProgress, deleteProgress,
   saveSelfReport, clubMatrix, logActivity, recentActivity, stats,

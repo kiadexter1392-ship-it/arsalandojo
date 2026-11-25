@@ -19,11 +19,12 @@
 .academy-app :is(button, a, input, select, textarea):focus-visible { outline: 3px solid var(--academy-gold); outline-offset: 3px; }
 .academy-app a { color: var(--academy-gold); text-underline-offset: 4px; }
 .academy-app :is(h1, h2, h3, p) { overflow-wrap: anywhere; }
-.academy-app .btn { min-height: 44px; border-radius: 12px; gap: 8px; }
+.academy-app .btn { min-height: 44px; border-radius: 12px; gap: 8px; transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.22s ease, background 0.2s ease, opacity 0.2s ease; }
 .academy-app .btn.primary { background: linear-gradient(120deg, #e5cea1, #c9a462); border: 1px solid #b38b48; color: #342919; box-shadow: 0 3px 10px rgba(146,112,53,.12); }
-.academy-app .btn.primary:hover { background: linear-gradient(120deg, #efdebc, #d4b273); box-shadow: 0 5px 18px rgba(146,112,53,.18); }
+.academy-app .btn.primary:hover:not(:disabled) { background: linear-gradient(120deg, #efdebc, #d4b273); box-shadow: 0 5px 18px rgba(146,112,53,.18); transform: translateY(-1px); }
+.academy-app .btn.primary:active:not(:disabled) { transform: translateY(0) scale(0.98); box-shadow: 0 2px 8px rgba(146,112,53,.14); }
 .academy-app .btn.ghost { color: var(--academy-muted); border-color: var(--academy-line); }
-.academy-app .btn:disabled { cursor: wait; opacity: .65; }
+.academy-app .btn:disabled { cursor: wait; opacity: .65; animation: submitPendingPulse 1.35s ease-in-out infinite; }
 .academy-eyebrow { font-size: 11px; font-weight: 600; color: var(--academy-gold); }
 .academy-skip { position: fixed; top: -100px; right: 16px; z-index: 100; padding: 10px 20px; background: white; border-radius: 12px; }
 .academy-skip:focus { top: 12px; }

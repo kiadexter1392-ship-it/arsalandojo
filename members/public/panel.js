@@ -97,10 +97,11 @@
   /* ================================= خانه ================================= */
 
   async function renderHome(box) {
-    const [plans, progress, ann] = await Promise.all([
+    const [plans, progress, ann, notifData] = await Promise.all([
       api('/api/plans'),
       api('/api/progress?year=' + state.year),
-      api('/api/announcements')
+      api('/api/announcements'),
+      api('/api/notifications').catch(() => ({ notifications: [], unread: 0 }))
     ]);
 
     const open = plans.plans.filter((p) => p.status !== 'done');
@@ -138,6 +139,9 @@
             </div>
           </div>
         </div>
+
+        <div id="homeUnreadBanner"></div>
+        <div id="homePwaSlot"></div>
 
         ${!ME.email ? `<div class="card" id="linkGmailCard">
           <div class="row between wrap" style="gap:12px">
@@ -184,6 +188,23 @@
       </div>`;
 
     wireGoto(box);
+    if (window.MemberExtras) {
+      const bannerEl = box.querySelector('#homeUnreadBanner');
+      const refreshHomeBanner = async () => {
+        await pollBell();
+        if (state.view === 'home') await switchView('home');
+      };
+      window.MemberExtras.renderUnreadBanner(bannerEl, {
+        notifications: notifData.notifications || [],
+        announcements: ann.announcements || [],
+        onRefresh: refreshHomeBanner
+      });
+      const pwaSlot = box.querySelector('#homePwaSlot');
+      window.MemberExtras.renderPwaCard(pwaSlot);
+      window.addEventListener('arslan-pwa-ready', () => {
+        if (state.view === 'home' && pwaSlot.isConnected) window.MemberExtras.renderPwaCard(pwaSlot);
+      }, { once: true });
+    }
     const quickGmailForm = box.querySelector('#quickGmailForm');
     if (quickGmailForm) {
       quickGmailForm.addEventListener('submit', async (e) => {
@@ -399,9 +420,11 @@
           ${stat('ماه‌های ثبت‌شده', fa(filled.length), 'از ۱۲ ماه', 'var(--blue)')}
         </div>
 
-        <div class="card member-progress-dashboard">
-          <div class="card-head wrap"><div><div class="card-title">نمودار پیشرفت ماهانه</div><p class="tiny">فقط نمره‌های ثبت‌شده توسط مربی نمایش داده می‌شوند.</p></div></div>
-          ${filled.length ? `<div class="member-progress-chart" role="list" aria-label="نمره‌های واقعی ماهانه">${overallRow.map((score, i) => score === null || score === undefined ? '' : `<div class="member-progress-column" role="listitem" aria-label="${esc(J.MONTHS[i])}: ${fa(score)} از ۱۰۰"><span>${fa(score)}</span><div class="member-progress-track"><i style="height:${Math.max(0, Math.min(100, Number(score)))}%"></i></div><small>${esc(J.MONTHS[i])}</small></div>`).join('')}</div>` : emptyHTML('نمره‌ای برای این سال ثبت نشده است', '📊')}
+        <div id="progressAnalyticsSlot">
+          <div class="card member-progress-dashboard">
+            <div class="card-head wrap"><div><div class="card-title">نمودار پیشرفت ماهانه</div><p class="tiny">فقط نمره‌های ثبت‌شده توسط مربی نمایش داده می‌شوند.</p></div></div>
+            ${filled.length ? `<div class="member-progress-chart" role="list" aria-label="نمره‌های واقعی ماهانه">${overallRow.map((score, i) => score === null || score === undefined ? '' : `<div class="member-progress-column" role="listitem" aria-label="${esc(J.MONTHS[i])}: ${fa(score)} از ۱۰۰"><span>${fa(score)}</span><div class="member-progress-track"><i style="height:${Math.max(0, Math.min(100, Number(score)))}%"></i></div><small>${esc(J.MONTHS[i])}</small></div>`).join('')}</div>` : emptyHTML('نمره‌ای برای این سال ثبت نشده است', '📊')}
+          </div>
         </div>
 
         <div class="card">
@@ -470,6 +493,14 @@
           </div>
         </div>
       </div>`;
+
+    if (window.MemberExtras) {
+      window.MemberExtras.renderProgressAnalytics(box.querySelector('#progressAnalyticsSlot'), {
+        progress: p,
+        year: state.year,
+        months: J.MONTHS
+      });
+    }
 
     const logForm = box.querySelector('#progressLogForm');
     if (logForm) logForm.addEventListener('submit', async event => {
@@ -575,16 +606,30 @@
       if (unread) { cnt.textContent = fa(unread); cnt.classList.remove('hidden'); } else { cnt.classList.add('hidden'); }
     } else {
       const d = await api('/api/notifications');
-      target.innerHTML = d.notifications.length ? d.notifications.map((n) => `
-        <div class="list-item">
-          <span class="badge ${n.read ? 'dark' : 'red'}">${n.read ? '—' : 'جدید'}</span>
-          <div class="grow"><div class="title">${esc(n.title)}</div>${n.body ? `<div class="tiny">${esc(n.body)}</div>` : ''}</div>
-          <span class="tiny nowrap">${J.timeAgo(n.created_at)}</span>
-        </div>`).join('') : emptyHTML('اعلانی نداری', '🔔');
-      if (d.unread) {
+      const metaFn = window.MemberExtras ? window.MemberExtras.notifMeta : () => ({ label: 'اعلان', cls: 'dark' });
+      target.innerHTML = (d.unread ? `<div class="row between wrap" style="margin-bottom:10px"><span class="tiny muted">${fa(d.unread)} اعلان خوانده‌نشده</span><button type="button" class="btn sm ghost" id="inboxMarkAllBtn">همه را خواندم ✓</button></div>` : '') +
+        (d.notifications.length ? d.notifications.map((n) => {
+          const meta = metaFn(n.type);
+          return `
+            <div class="list-item">
+              <span class="badge ${n.read ? 'dark' : meta.cls}">${n.read ? 'خوانده' : esc(meta.label)}</span>
+              <div class="grow"><div class="title">${esc(n.title)}</div>${n.body ? `<div class="tiny">${esc(n.body)}</div>` : ''}</div>
+              <span class="tiny nowrap">${J.timeAgo(n.created_at)}</span>
+              ${n.read ? '' : `<button type="button" class="btn sm ghost" data-inbox-read="${n.id}">خوانده شد</button>`}
+            </div>`;
+        }).join('') : emptyHTML('اعلانی نداری', '🔔'));
+      target.querySelector('#inboxMarkAllBtn')?.addEventListener('click', async () => {
         await api('/api/notifications/read', { method: 'POST' });
-        pollBell();
-      }
+        await pollBell();
+        renderNews(box);
+      });
+      target.querySelectorAll('[data-inbox-read]').forEach((b) => {
+        b.addEventListener('click', async () => {
+          await api(`/api/notifications/${b.dataset.inboxRead}/read`, { method: 'POST' });
+          await pollBell();
+          renderNews(box);
+        });
+      });
     }
   }
 
@@ -607,10 +652,14 @@
   /* ============================= پرداخت شهریه ============================ */
 
   async function renderPayment(box) {
-    let paymentData, faqData;
+    let paymentData, faqData, receiptsData;
     try {
-      const [p, f] = await Promise.all([api('/api/payment'), api('/api/faq')]);
-      paymentData = p; faqData = f;
+      const [p, f, r] = await Promise.all([
+        api('/api/payment'),
+        api('/api/faq'),
+        api('/api/tuition/receipts').catch(() => ({ receipts: [], currentPeriod: null, care: null }))
+      ]);
+      paymentData = p; faqData = f; receiptsData = r;
     } catch (err) {
       box.innerHTML = '<div class="card empty"><span class="big">⚠</span>' + esc(err.message) + '</div>';
       return;
@@ -636,6 +685,8 @@
           </div>
         </div>
 
+        <div id="tuitionReceiptSlot"></div>
+
         <div class="card">
           <div class="card-head">
             <div class="card-title"><span class="dot"></span> 📋 تعرفه شهریه ماهانه</div>
@@ -645,16 +696,17 @@
               <thead><tr><th>رشته</th><th>شهریه (هزار تومان)</th><th>پرداخت</th></tr></thead>
               <tbody>
                 ${paymentData.pricing.map(function (p) {
+                  const toman = Number(p.priceNum || 0) * 1000;
                   return '<tr>' +
                     '<td class="bold">' + esc(p.discipline) + '</td>' +
                     '<td><span class="badge gold">' + esc(p.price) + ' هزار تومان</span></td>' +
-                    '<td><a href="' + esc(paymentData.baleLink) + '" target="_blank" class="btn sm primary">ارسال فیش</a></td>' +
+                    '<td><button type="button" class="btn sm primary" data-pick-fee="' + toman + '">ثبت فیش در سایت</button></td>' +
                   '</tr>';
                 }).join('')}
               </tbody>
             </table>
           </div>
-          <p class="tiny" style="margin-top:12px">📌 مهلت پرداخت شهریه تا ۱۲ هر ماه. لطفاً پس از واریز فیش را از بله ارسال نمایید.</p>
+          <p class="tiny" style="margin-top:12px">📌 مهلت پرداخت شهریه تا ۱۲ هر ماه. همچنین در صورت نیاز می‌توانید فیش را در پیام‌رسان بله ارسال کنید.</p>
         </div>
 
         <div class="card">
@@ -671,6 +723,27 @@
           </div>
         </div>
       </div>`;
+
+    if (window.MemberExtras) {
+      window.MemberExtras.renderTuitionReceiptSection(box.querySelector('#tuitionReceiptSlot'), {
+        paymentData,
+        currentPeriod: receiptsData.currentPeriod,
+        care: receiptsData.care,
+        receipts: receiptsData.receipts || [],
+        onSubmitted: () => renderPayment(box)
+      });
+    }
+
+    box.querySelectorAll('[data-pick-fee]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        const inp = box.querySelector('#receiptAmountInput');
+        if (inp) {
+          inp.value = btn.dataset.pickFee;
+          inp.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          inp.focus();
+        }
+      });
+    });
 
     // کپی شماره کارت
     box.querySelectorAll('[data-copy]').forEach(function (btn) {
@@ -808,8 +881,13 @@
               <li>کمربند ثبت‌شده: ${esc(ME.belt || 'ثبت نشده')}</li>
             </ul>
           </div>
+          <div id="profilePwaSlot"></div>
         </div>
       </div>`;
+
+    if (window.MemberExtras) {
+      window.MemberExtras.renderPwaCard(box.querySelector('#profilePwaSlot'), { alwaysShowIfEligible: true });
+    }
 
     box.querySelector('#profileForm').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -858,19 +936,31 @@
 
   async function bellBox() {
     const d = await api('/api/notifications');
+    const metaFn = window.MemberExtras ? window.MemberExtras.notifMeta : () => ({ label: 'اعلان', cls: 'dark' });
     modal({
       title: 'اعلان‌های من',
-      body: `<div class="drawer-list">${d.notifications.length ? d.notifications.map((n) => `
+      body: `<div class="drawer-list">${d.notifications.length ? d.notifications.map((n) => {
+        const meta = metaFn(n.type);
+        return `
         <div class="list-item">
-          <span class="badge ${n.read ? 'dark' : 'red'}">${n.read ? '—' : 'جدید'}</span>
+          <span class="badge ${n.read ? 'dark' : meta.cls}">${n.read ? 'خوانده' : esc(meta.label)}</span>
           <div class="grow"><div class="title">${esc(n.title)}</div>${n.body ? `<div class="tiny">${esc(n.body)}</div>` : ''}</div>
           <span class="tiny nowrap">${J.timeAgo(n.created_at)}</span>
-        </div>`).join('') : emptyHTML('اعلانی نداری', '🔔')}</div>`,
-      actions: [{ label: 'بستن', class: 'ghost', onClick: closeModal }]
+        </div>`;
+      }).join('') : emptyHTML('اعلانی نداری', '🔔')}</div>`,
+      actions: [
+        ...(d.unread ? [{
+          label: 'همه را خواندم ✓',
+          class: 'primary',
+          onClick: async () => {
+            await api('/api/notifications/read', { method: 'POST' });
+            await pollBell();
+            closeModal();
+            if (state.view === 'home') switchView('home');
+          }
+        }] : []),
+        { label: 'بستن', class: 'ghost', onClick: closeModal }
+      ]
     });
-    if (d.unread) {
-      await api('/api/notifications/read', { method: 'POST' });
-      pollBell();
-    }
   }
 }());
