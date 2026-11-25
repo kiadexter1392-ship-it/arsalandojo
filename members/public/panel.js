@@ -696,20 +696,20 @@
           </div>
           <div class="table-wrap">
             <table class="data">
-              <thead><tr><th>رشته</th><th>شهریه (هزار تومان)</th><th>پرداخت</th></tr></thead>
+              <thead><tr><th>رشته</th><th>شهریه ماهانه</th><th>پرداخت</th></tr></thead>
               <tbody>
                 ${paymentData.pricing.map(function (p) {
                   const toman = Number(p.priceNum || 0) * 1000;
                   return '<tr>' +
                     '<td class="bold">' + esc(p.discipline) + '</td>' +
-                    '<td><span class="badge gold">' + esc(p.price) + ' هزار تومان</span></td>' +
+                    '<td><span class="badge gold">' + esc(p.price) + '</span></td>' +
                     '<td><button type="button" class="btn sm primary" data-pick-fee="' + toman + '">ثبت فیش در سایت</button></td>' +
                   '</tr>';
                 }).join('')}
               </tbody>
             </table>
           </div>
-          <p class="tiny" style="margin-top:12px">📌 مهلت پرداخت شهریه تا ۱۲ هر ماه. همچنین در صورت نیاز می‌توانید فیش را در پیام‌رسان بله ارسال کنید.</p>
+          <p class="tiny" style="margin-top:12px">پس از واریز شهریه می‌توانید فیش را همین‌جا ثبت کنید یا در پیام‌رسان بله بفرستید.</p>
         </div>
 
         <div class="card">
@@ -785,14 +785,14 @@
             <div style="text-align:center;padding:24px;background:var(--bg-2);border-radius:16px;border:1px solid var(--line)">
               <div style="font-size:36px;margin-bottom:12px">📱</div>
               <h4 style="margin:0 0 8px">پیام‌رسان بله</h4>
-              <p class="muted small" style="margin:0 0 14px">سریع‌ترین راه ارتباط با ما</p>
+              <p class="muted small" style="margin:0 0 14px">پاسخگویی مستقیم در پیام‌رسان</p>
               <a href="https://ble.ir/+989016399804" target="_blank" class="btn primary">باز کردن بله</a>
               <div class="en tiny" style="margin-top:10px;color:var(--gold)">+989016399804</div>
             </div>
             <div style="text-align:center;padding:24px;background:var(--bg-2);border-radius:16px;border:1px solid var(--line)">
               <div style="font-size:36px;margin-bottom:12px">📞</div>
               <h4 style="margin:0 0 8px">تماس تلفنی</h4>
-              <p class="muted small" style="margin:0 0 14px">در ساعات اداری</p>
+              <p class="muted small" style="margin:0 0 14px">تماس مستقیم با باشگاه</p>
               <a href="tel:+989016399804" class="btn ghost">تماس بگیرید</a>
               <div class="en tiny" style="margin-top:10px;color:var(--gold)">+989016399804</div>
             </div>

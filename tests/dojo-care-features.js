@@ -234,6 +234,11 @@ const PNG_1PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfF
     assert.equal(paymentRes.status, 200);
     assert.ok(paymentRes.body.pricing.length >= 7);
     assert.ok(paymentRes.body.pricing.some((p) => p.discipline.includes('موی تای')));
+    assert.ok(paymentRes.body.pricing.every((p) => p.price.includes('میلیون') && Number(p.priceNum) >= 1500));
+
+    const faqRes = await api('/api/faq');
+    assert.equal(faqRes.status, 200);
+    assert.ok(!JSON.stringify(faqRes.body).includes('۱۲ هر ماه') && !JSON.stringify(faqRes.body).includes('دوازدهم'));
 
     const homeHtml = await (await fetch(base + '/')).text();
     assert.ok(!homeHtml.includes('d.pricing.slice(0, 6)'), 'index.html must not truncate disciplines');
@@ -241,13 +246,19 @@ const PNG_1PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfF
     assert.match(homeHtml, /id="openPaymentBtn"/);
     assert.match(homeHtml, /https:\/\/ble\.ir\/\+989016399804/);
     assert.match(homeHtml, /\/panel\?view=payment/);
+    assert.ok(!homeHtml.includes('۱۲ هر ماه') && !homeHtml.includes('مهلت پرداخت'));
+    assert.ok(!homeHtml.includes('تمرینت رو دنبال کن'));
+    assert.ok(!homeHtml.includes('چرا ارسلان دوجو؟'));
+    assert.ok(!homeHtml.includes('همه در یک پنل'));
 
     const panelJs = await (await fetch(base + '/panel.js')).text();
     assert.match(panelJs, /new URLSearchParams\(location\.search\)\.get\('view'\)/);
+    assert.ok(!panelJs.includes('۱۲ هر ماه'));
 
     const cardStackJs = await (await fetch(base + '/CardStack.js')).text();
     assert.ok(!cardStackJs.includes('Math.min(cards.length, 6)'), 'CardStack must not truncate at 6 cards');
     assert.ok(!cardStackJs.includes('stk-chip'), 'CardStack must not render bottom stk-chip buttons');
+    assert.ok(!cardStackJs.includes('هزار تومان / ماه'), 'CardStack must not display هزار تومان unit');
     assert.match(cardStackJs, /stk-cs-bg/);
     assert.match(cardStackJs, /card-karate-kids\.jpg/);
     assert.match(cardStackJs, /card-crossfit-kids\.jpg/);

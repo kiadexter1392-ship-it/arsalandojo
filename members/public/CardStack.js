@@ -25,7 +25,7 @@
     else if (d.includes('بوکس')) file = 'card-boxing.jpg';
     else if (d.includes('ژیمناستیک')) file = 'card-gym.jpg';
     else if (d.includes('موی تای') || d.includes('موی‌تای')) file = 'card-muaythai.jpg';
-    return prefix + '/images/' + file + '?v=3';
+    return prefix + '/images/' + file + '?v=4';
   }
 
   function computeFanMetrics(containerW, n) {
@@ -93,7 +93,7 @@
 
     var hintEl = document.createElement('div');
     hintEl.className = 'stk-hint';
-    hintEl.textContent = 'برای مشاهده قیمت هر رشته، روی کارت بزنید یا نشانگر را نگه دارید';
+    hintEl.textContent = 'برای دیدن شهریه هر رشته روی کارت بزنید';
 
     var activeIdx = null;
     var hoveredIdx = null;
@@ -165,7 +165,7 @@
         el.className = 'stk-cs-card';
         el.setAttribute('role', 'button');
         el.setAttribute('tabindex', '0');
-        el.setAttribute('aria-label', card.discipline + ' — ' + card.price + ' هزار تومان');
+        el.setAttribute('aria-label', card.discipline + ' — ' + card.price);
 
         el.innerHTML =
           '<div class="stk-cs-face">' +
@@ -175,7 +175,7 @@
             '<div class="stk-cs-body">' +
               '<div class="stk-cs-disc">' + escapeHtml(card.discipline) + '</div>' +
               '<div class="stk-cs-price">' + escapeHtml(card.price) + '</div>' +
-              '<div class="stk-cs-unit">هزار تومان / ماه</div>' +
+              '<div class="stk-cs-unit">ماهانه</div>' +
             '</div>' +
           '</div>';
 

@@ -38,8 +38,8 @@
   const TUITION_STATUS = {
     paid: { label: 'شهریه این ماه تایید شد ✓', cls: 'green' },
     pending: { label: 'فیش در انتظار بررسی مربی', cls: 'gold' },
-    due_soon: { label: 'نزدیک به مهلت پرداخت (تا ۱۲ ماه)', cls: 'gold' },
-    overdue: { label: 'مهلت پرداخت گذشته — لطفاً فیش ثبت کنید', cls: 'red' },
+    due_soon: { label: 'در انتظار پرداخت شهریه', cls: 'gold' },
+    overdue: { label: 'فیش این ماه ثبت نشده', cls: 'red' },
     unpaid: { label: 'هنوز فیشی برای این ماه ثبت نشده', cls: 'dark' }
   };
 
@@ -440,7 +440,7 @@
             <span class="tiny muted">مبلغ سریع بر اساس رشته:</span>
             ${(paymentData.pricing || []).map((p) => {
               const toman = Number(p.priceNum || 0) * 1000;
-              return `<button type="button" class="btn sm ghost" data-fill-amount="${toman}">${esc(p.discipline)} (${esc(p.price)} ه.ت)</button>`;
+              return `<button type="button" class="btn sm ghost" data-fill-amount="${toman}">${esc(p.discipline)} (${esc(p.price)})</button>`;
             }).join('')}
           </div>
 

@@ -590,9 +590,9 @@ form button[type="submit"]:disabled {
   inset: 0;
   background: linear-gradient(
     180deg,
-    rgba(20, 10, 38, 0.14) 0%,
-    rgba(22, 12, 42, 0.48) 48%,
-    rgba(16, 8, 32, 0.88) 100%
+    rgba(20, 10, 38, 0.10) 0%,
+    rgba(22, 12, 42, 0.48) 44%,
+    rgba(16, 8, 32, 0.92) 100%
   );
   pointer-events: none;
 }
@@ -619,21 +619,22 @@ form button[type="submit"]:disabled {
 }
 .stk-cs-body {
   position: relative; z-index: 2;
-  text-align: center; padding: 14px 10px 14px; width: 100%; max-width: 100%;
+  text-align: center; padding: 12px 8px 12px; width: 100%; max-width: 100%;
 }
 .stk-cs-disc {
-  font-size: clamp(11px, 2.7vw, 12.5px); font-weight: 700; color: #ffffff;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.65);
-  margin-bottom: 6px; line-height: 1.4; word-break: break-word; overflow-wrap: anywhere;
+  font-size: clamp(10.5px, 2.5vw, 12.5px); font-weight: 700; color: #ffffff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.72);
+  margin-bottom: 5px; line-height: 1.35; word-break: break-word; overflow-wrap: anywhere;
 }
 .stk-cs-price {
-  font-size: clamp(18px, 4.8vw, 24px); font-weight: 900; color: var(--gold-light);
-  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.65);
-  margin-bottom: 2px; line-height: 1.1;
+  font-size: clamp(11px, 2.7vw, 13.5px); font-weight: 800; color: var(--gold-light);
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.72);
+  margin-bottom: 3px; line-height: 1.45;
+  word-break: break-word;
 }
 .stk-cs-unit {
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.82);
+  font-size: 9.5px;
+  color: rgba(255, 255, 255, 0.78);
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
 }
 .stk-hint {

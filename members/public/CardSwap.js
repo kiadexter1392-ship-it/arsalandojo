@@ -32,7 +32,7 @@
   function buildCards() {
     var prefix = window.UI && window.UI.PATH_PREFIX ? window.UI.PATH_PREFIX : '';
     return CARD_DEFS.map(function(c) {
-      return { id: c.id, title: c.title, src: prefix + '/images/' + c.file + '?v=2' };
+      return { id: c.id, title: c.title, src: prefix + '/images/' + c.file + '?v=4' };
     });
   }
 
