@@ -169,7 +169,30 @@ async function port() {
     const inactiveGoogle = await api('/api/auth/google', { idToken: 'tok-inactive' });
     assert.equal(inactiveGoogle.status, 403);
 
-    console.log('PASS: Google OAuth member sign-in, unregistered prefill, registration linking, duplicate protection, and security checks');
+    // 5. Verify website exposes Google Client ID, GIS button/widget, purple glass CSS, and compatible CSP/COOP headers
+    const cfgRes = await api('/api/config');
+    assert.equal(cfgRes.status, 200);
+    assert.equal(cfgRes.body.googleClientId, CLIENT_ID);
+
+    const landingRes = await fetch(base + '/');
+    assert.equal(landingRes.status, 200);
+    const csp = landingRes.headers.get('content-security-policy') || '';
+    const coop = landingRes.headers.get('cross-origin-opener-policy') || '';
+    assert.ok(csp.includes('https://accounts.google.com/gsi/client'), 'CSP must allow GIS script');
+    assert.ok(csp.includes('https://accounts.google.com/gsi/'), 'CSP must allow GIS frame/connect');
+    assert.equal(coop, 'same-origin-allow-popups');
+    const landingHtml = await landingRes.text();
+    assert.ok(landingHtml.includes('id="dojo-google-auth-wrap"'), 'Landing page includes Google auth box');
+    assert.ok(landingHtml.includes('id="dojo-google-auth-btn"'), 'Landing page includes Continue with Google button');
+    assert.ok(landingHtml.includes('id="dojo-google-web-btn"'), 'Landing page includes web GIS button slot');
+    assert.ok(landingHtml.includes('https://accounts.google.com/gsi/client'), 'Landing page loads GIS client');
+
+    const cssRes = await fetch(base + '/ui/style.css');
+    assert.equal(cssRes.status, 200);
+    const cssText = await cssRes.text();
+    assert.ok(cssText.includes('#f3ebff') && cssText.includes('#e9d8fd'), 'Website CSS uses royal purple ambient backdrop');
+
+    console.log('PASS: Google OAuth member sign-in, unregistered prefill, registration linking, duplicate protection, web GIS/CSS/CSP checks, and security checks');
   } finally {
     child.kill('SIGTERM');
     await once(child, 'exit').catch(() => {});

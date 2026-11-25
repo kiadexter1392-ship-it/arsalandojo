@@ -1,5 +1,5 @@
 /* Scope-aware static cache. Never store authenticated pages or API responses. */
-const CACHE_NAME = 'arslan-dojo-static-v2-' + new URL(self.registration.scope).pathname;
+const CACHE_NAME = 'arslan-dojo-static-v3-' + new URL(self.registration.scope).pathname;
 const ASSETS = ['ui/style.css', 'ui/shell.css', 'ui/ui.js', 'ui/jalali.browser.js']
   .map(path => new URL(path, self.registration.scope).href);
 
@@ -10,7 +10,10 @@ self.addEventListener('install', event => {
 
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.delete('arslan-dojo-v1').then(() => self.clients.claim())
+    Promise.all([
+      caches.delete('arslan-dojo-v1'),
+      caches.delete('arslan-dojo-static-v2-' + new URL(self.registration.scope).pathname)
+    ]).then(() => self.clients.claim())
   );
 });
 

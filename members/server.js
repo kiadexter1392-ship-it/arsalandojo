@@ -109,7 +109,8 @@ app.get('/api/config', (ctx) => {
     belts: ['سفید', 'زرد', 'نارنجی', 'سبز', 'آبی', 'قهوه‌ای', 'مشکی دان ۱', 'مشکی دان ۲'],
     disciplines: ['کاراته', 'کراسفیت', 'بوکس', 'ژیمناستیک', 'موی تای'],
     supportPhone: '+989016399804',
-    baleLink: 'https://ble.ir/+989016399804'
+    baleLink: 'https://ble.ir/+989016399804',
+    googleClientId: PUBLIC_GOOGLE_CLIENT_ID
   });
 });
 
@@ -181,6 +182,7 @@ app.get('/api/faq', (ctx) => {
 /* --------------------------- ثبت‌نام و ورود --------------------------- */
 
 const DEFAULT_GOOGLE_CLIENT_ID = '5918828036-9eq5ut53ujmrub4i1t7039gep5s9a6vi.apps.googleusercontent.com';
+const PUBLIC_GOOGLE_CLIENT_ID = String(process.env.GOOGLE_CLIENT_ID || DEFAULT_GOOGLE_CLIENT_ID).trim() || DEFAULT_GOOGLE_CLIENT_ID;
 const ALLOWED_GOOGLE_CLIENT_IDS = new Set(
   String(process.env.GOOGLE_CLIENT_IDS || process.env.GOOGLE_CLIENT_ID || DEFAULT_GOOGLE_CLIENT_ID)
     .split(',')

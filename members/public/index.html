@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
-  <meta name="theme-color" content="#0a0a0f">
+  <meta name="theme-color" content="#f3ebff">
   <meta name="description" content="باشگاه رزمی ارسلان دوجو — کاراته، کراسفیت، بوکس، ژیمناستیک و موی‌تای. ثبت‌نام آنلاین، پیگیری پیشرفت و برنامه تمرینی اختصاصی.">
   <meta name="keywords" content="باشگاه رزمی, کاراته, کراسفیت, بوکس, ژیمناستیک, موی تای, ارسلان دوجو, تمرین, ورزش">
   <meta name="author" content="Arslan Dojo">
@@ -15,8 +15,9 @@
   <link rel="apple-touch-icon" href="/ui/icons/icon-192.png">
   <link rel="manifest" href="/manifest.json">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
-  <link rel="stylesheet" href="/ui/style.css">
+  <link rel="stylesheet" href="/ui/style.css?v=purple-1">
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 
@@ -186,6 +187,22 @@
       </div>
       <button type="submit" class="btn btn-gold btn-full" id="registerBtn">ثبت‌نام و ورود به پنل</button>
     </form>
+
+    <div id="dojo-google-auth-wrap" style="margin-top:18px;padding-top:16px;border-top:1px solid rgba(109,40,217,0.18);direction:rtl;text-align:center;">
+      <div style="font-size:12px;color:#5e5470;margin-bottom:10px;">یا ورود سریع با حساب گوگل</div>
+      <div id="dojo-google-web-btn" style="display:none;justify-content:center;min-height:44px;"></div>
+      <button type="button" id="dojo-google-auth-btn" style="width:100%;min-height:48px;display:flex;align-items:center;justify-content:center;gap:10px;padding:10px 16px;border-radius:10px;border:1px solid rgba(124,58,237,0.24);background:#ffffff;color:#18181b;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 4px 14px rgba(76,29,149,0.08);">
+        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="#EA4335" d="M12 5.04c1.64 0 3.12.56 4.28 1.66l3.2-3.2C17.54 1.68 14.98.64 12 .64 7.56.64 3.72 3.18 1.86 6.88l3.73 2.9C6.46 7.06 9.01 5.04 12 5.04z"/>
+          <path fill="#4285F4" d="M23.04 12.27c0-.79-.07-1.55-.2-2.27H12v4.3h6.2c-.27 1.44-1.08 2.66-2.3 3.48l3.56 2.76c2.08-1.92 3.58-4.74 3.58-8.27z"/>
+          <path fill="#FBBC05" d="M5.59 14.22A7.2 7.2 0 0 1 5.21 12c0-.77.14-1.52.38-2.22l-3.73-2.9A11.36 11.36 0 0 0 .64 12c0 1.84.44 3.58 1.22 5.12l3.73-2.9z"/>
+          <path fill="#34A853" d="M12 23.36c3.14 0 5.77-1.04 7.7-2.82l-3.56-2.76c-1.04.7-2.38 1.12-4.14 1.12-2.99 0-5.54-2.02-6.41-4.74l-3.73 2.9C3.72 20.82 7.56 23.36 12 23.36z"/>
+        </svg>
+        <span id="dojo-google-auth-label">ادامه با گوگل</span>
+      </button>
+      <div id="dojo-google-auth-status" style="display:none;margin-top:8px;padding:10px 12px;border-radius:10px;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.32);color:#065f46;font-size:13px;font-weight:600;"></div>
+      <div id="dojo-google-auth-error" style="display:none;margin-top:8px;padding:10px 12px;border-radius:10px;background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.32);color:#b91c1c;font-size:12px;"></div>
+    </div>
   </div>
 </section>
 
@@ -286,9 +303,84 @@
   tabLogin.addEventListener('click', function() { showAuthMsg(''); showAuth('login'); });
   tabRegister.addEventListener('click', function() { showAuthMsg(''); showAuth('register'); });
 
-  /* ── Coach Link ── */
+  /* ── Coach Link & Web Google Sign-In Setup ── */
+  var webGoogleClientId = '';
+  var webGoogleInitialized = false;
+
+  function initWebGoogleSignIn(clientId) {
+    if (window.AndroidDojoBridge) return;
+    if (!clientId || webGoogleInitialized) return;
+    var attempts = 0;
+    function tryMount() {
+      if (window.AndroidDojoBridge || webGoogleInitialized) return;
+      if (window.google && window.google.accounts && window.google.accounts.id) {
+        webGoogleInitialized = true;
+        try {
+          window.google.accounts.id.initialize({
+            client_id: clientId,
+            callback: function(response) {
+              if (response && response.credential) {
+                window.__dojoHandleGoogleIdToken(response.credential);
+              }
+            },
+            ux_mode: 'popup'
+          });
+          var webBtnHost = document.getElementById('dojo-google-web-btn');
+          var fallbackBtn = document.getElementById('dojo-google-auth-btn');
+          if (webBtnHost) {
+            var w = Math.max(240, Math.min(400, (webBtnHost.parentElement ? webBtnHost.parentElement.clientWidth : 340)));
+            window.google.accounts.id.renderButton(webBtnHost, {
+              type: 'standard',
+              theme: 'outline',
+              size: 'large',
+              text: 'continue_with',
+              shape: 'rectangular',
+              logo_alignment: 'left',
+              locale: 'fa',
+              width: w
+            });
+            webBtnHost.style.display = 'flex';
+            if (fallbackBtn) fallbackBtn.style.display = 'none';
+          }
+        } catch (e) {
+          webGoogleInitialized = false;
+        }
+        return;
+      }
+      attempts += 1;
+      if (attempts < 40) setTimeout(tryMount, 250);
+    }
+    tryMount();
+  }
+
+  var fallbackGoogleBtn = document.getElementById('dojo-google-auth-btn');
+  if (fallbackGoogleBtn) {
+    fallbackGoogleBtn.addEventListener('click', function() {
+      if (window.AndroidDojoBridge && typeof window.AndroidDojoBridge.requestGoogleSignIn === 'function') {
+        var lbl = document.getElementById('dojo-google-auth-label');
+        if (lbl) lbl.textContent = 'در حال باز کردن حساب گوگل...';
+        window.AndroidDojoBridge.requestGoogleSignIn();
+        return;
+      }
+      if (window.google && window.google.accounts && window.google.accounts.id) {
+        if (!webGoogleInitialized && webGoogleClientId) initWebGoogleSignIn(webGoogleClientId);
+        try { window.google.accounts.id.prompt(); } catch (_) {}
+        return;
+      }
+      var errEl = document.getElementById('dojo-google-auth-error');
+      if (errEl) {
+        errEl.style.display = 'block';
+        errEl.textContent = 'سرویس ورود گوگل در مرورگر در دسترس نیست؛ اتصال اینترنت یا مسدودکننده مرورگر را بررسی کنید و یا با نام کاربری وارد شوید.';
+      }
+    });
+  }
+
   UI.loadConfig().then(function(cfg) {
     document.getElementById('coachLink').href = UI.peerUrl(cfg.coachPort);
+    if (cfg && cfg.googleClientId) {
+      webGoogleClientId = String(cfg.googleClientId);
+      initWebGoogleSignIn(webGoogleClientId);
+    }
   }).catch(function() {});
 
   /* ── Pricing CardStack (vanilla JS) ── */

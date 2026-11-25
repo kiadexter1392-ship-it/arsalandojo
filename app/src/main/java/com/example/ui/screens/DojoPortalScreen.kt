@@ -532,32 +532,38 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
         '<div id="dojo-google-auth-status" style="display:none;margin-top:8px;padding:10px 12px;border-radius:10px;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.32);color:#065f46;font-size:13px;font-weight:600;"></div>' +
         '<div id="dojo-google-auth-error" style="display:none;margin-top:8px;padding:10px 12px;border-radius:10px;background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.32);color:#b91c1c;font-size:12px;"></div>';
       host.appendChild(wrap);
-      var btn = document.getElementById('dojo-google-auth-btn');
-      if(btn){
-        btn.addEventListener('click', function(ev){
-          if(ev && ev.preventDefault) ev.preventDefault();
-          if(window.__dojoGoogleState && window.__dojoGoogleState.signingIn) return;
-          var errBox = document.getElementById('dojo-google-auth-error');
-          var lbl = document.getElementById('dojo-google-auth-label');
-          if(errBox) errBox.style.display = 'none';
-          try{
-            if(window.AndroidDojoBridge && window.AndroidDojoBridge.requestGoogleSignIn){
-              if(lbl) lbl.textContent = 'در حال باز کردن حساب گوگل...';
-              window.AndroidDojoBridge.requestGoogleSignIn();
-            }else{
-              if(errBox){
-                errBox.style.display = 'block';
-                errBox.textContent = 'ارتباط دکمه با برنامه برقرار نیست.';
-              }
-            }
-          }catch(e){
+    }
+    var webBtn = document.getElementById('dojo-google-web-btn');
+    if(webBtn){
+      webBtn.style.display = 'none';
+    }
+    var btn = document.getElementById('dojo-google-auth-btn');
+    if(btn && btn.getAttribute('data-dojo-android-bound') !== '1'){
+      btn.setAttribute('data-dojo-android-bound', '1');
+      btn.addEventListener('click', function(ev){
+        if(ev && ev.preventDefault) ev.preventDefault();
+        if(ev && ev.stopImmediatePropagation) ev.stopImmediatePropagation();
+        if(window.__dojoGoogleState && window.__dojoGoogleState.signingIn) return;
+        var errBox = document.getElementById('dojo-google-auth-error');
+        var lbl = document.getElementById('dojo-google-auth-label');
+        if(errBox) errBox.style.display = 'none';
+        try{
+          if(window.AndroidDojoBridge && window.AndroidDojoBridge.requestGoogleSignIn){
+            if(lbl) lbl.textContent = 'در حال باز کردن حساب گوگل...';
+            window.AndroidDojoBridge.requestGoogleSignIn();
+          }else{
             if(errBox){
               errBox.style.display = 'block';
-              errBox.textContent = String((e && e.message) || e || 'خطا در اجرای دکمه گوگل');
+              errBox.textContent = 'ارتباط دکمه با برنامه برقرار نیست.';
             }
           }
-        });
-      }
+        }catch(e){
+          if(errBox){
+            errBox.style.display = 'block';
+            errBox.textContent = String((e && e.message) || e || 'خطا در اجرای دکمه گوگل');
+          }
+        }
+      }, true);
     }
     var st = window.__dojoGoogleState || {};
     var btnEl = document.getElementById('dojo-google-auth-btn');

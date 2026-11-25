@@ -1,12 +1,13 @@
 /* 01 — Same white / muted-gold tokens as the member panel; no global overrides. */
 .academy-app {
-  --academy-ink: #252b32;
-  --academy-muted: #62686c;
-  --academy-gold: #967137;
-  --academy-line: rgba(154, 128, 80, .20);
+  --academy-ink: #1a1a2e;
+  --academy-muted: #5b5370;
+  --academy-gold: #8c6323;
+  --academy-line: rgba(124, 58, 237, .22);
   margin: 0;
   min-height: 100vh;
-  background: radial-gradient(ellipse at 90% 0, rgba(212,168,83,.09), transparent 42%), var(--bg-gradient);
+  background: var(--bg-gradient);
+  background-attachment: fixed;
   color: var(--academy-ink);
   font-family: 'Vazirmatn', Tahoma, sans-serif;
   font-size: 14px;

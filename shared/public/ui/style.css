@@ -1,38 +1,46 @@
 /* ══════════════════════════════════════════════
-   Arslan Dojo — Glassmorphism Theme
-   White Glass + Gold + Light Gray
+   Arslan Dojo — Royal Purple Glassmorphism Theme
+   Frosted Lavender-White Glass + Royal Purple + Gold
    ══════════════════════════════════════════════ */
 :root {
   --gold: #d4a853;
   --gold-light: #e8c878;
-  --gold-soft: rgba(212,168,83,0.15);
-  --gold-glow: rgba(212,168,83,0.4);
+  --gold-soft: rgba(212,168,83,0.16);
+  --gold-glow: rgba(212,168,83,0.42);
+  --purple: #6d28d9;
+  --purple-dark: #4c1d95;
+  --purple-soft: rgba(109, 40, 217, 0.14);
+  --purple-border: rgba(124, 58, 237, 0.24);
   --red: #e74c3c;
   --red-soft: rgba(231,76,60,0.12);
   --green: #27ae60;
   --green-soft: rgba(39,174,96,0.12);
   --blue: #3498db;
   --blue-soft: rgba(52,152,219,0.12);
-  --bg: #f0ede6;
-  --bg-gradient: linear-gradient(135deg, #f5f3ee 0%, #e8e4db 50%, #f0ede6 100%);
-  --glass: rgba(255,255,255,0.65);
-  --glass-strong: rgba(255,255,255,0.85);
-  --glass-border: rgba(212,168,83,0.2);
-  --glass-shadow: 0 8px 32px rgba(0,0,0,0.08);
-  /* ══ Professional Gold Glass — from css.glass, gold-tuned ══ */
-  --amber-glass: rgba(212,168,83,0.18);
-  --amber-glass-border: rgba(212,168,83,0.30);
-  --amber-blur: 11.2px;
-  --amber-shadow: 0 4px 30px rgba(0,0,0,0.08);
-  --bg-2: rgba(255,255,255,0.5);
-  --bg-3: rgba(255,255,255,0.75);
-  --line: rgba(212,168,83,0.15);
-  --line-soft: rgba(0,0,0,0.06);
-  --panel: rgba(255,255,255,0.4);
-  --muted: #777;
-  --muted-2: #999;
+  --bg: #f1e6ff;
+  --bg-gradient:
+    radial-gradient(circle at 14% 18%, rgba(76, 29, 149, 0.40) 0%, rgba(109, 40, 217, 0.24) 26%, rgba(168, 85, 247, 0.08) 46%, transparent 62%),
+    radial-gradient(circle at 86% 76%, rgba(109, 40, 217, 0.36) 0%, rgba(168, 85, 247, 0.20) 28%, rgba(192, 132, 252, 0.08) 48%, transparent 64%),
+    radial-gradient(circle at 48% 48%, rgba(168, 85, 247, 0.18) 0%, rgba(192, 132, 252, 0.09) 42%, transparent 72%),
+    linear-gradient(180deg, #f3ebff 0%, #e9d8fd 50%, #f1e6ff 100%);
+  --glass: rgba(255,255,255,0.68);
+  --glass-strong: rgba(248,242,255,0.88);
+  --glass-border: rgba(124,58,237,0.22);
+  --glass-shadow: 0 10px 32px rgba(76,29,149,0.12);
+  /* ══ Frosted Glass Cards over Royal Purple Backdrop ══ */
+  --amber-glass: rgba(255,255,255,0.68);
+  --amber-glass-border: rgba(124,58,237,0.24);
+  --amber-blur: 14px;
+  --amber-shadow: 0 10px 30px rgba(76,29,149,0.11);
+  --bg-2: rgba(255,255,255,0.58);
+  --bg-3: rgba(255,255,255,0.80);
+  --line: rgba(124,58,237,0.18);
+  --line-soft: rgba(76,29,149,0.08);
+  --panel: rgba(255,255,255,0.52);
+  --muted: #5e5470;
+  --muted-2: #7e7392;
   --text: #1a1a2e;
-  --text-light: #444;
+  --text-light: #3b3350;
   --radius: 16px;
   --radius-lg: 20px;
   --sidebar-w: 260px;
@@ -43,6 +51,7 @@ html { scroll-behavior: smooth; }
 body {
   font-family: 'Vazirmatn', Tahoma, sans-serif;
   background: var(--bg-gradient);
+  background-attachment: fixed;
   color: var(--text);
   line-height: 1.7;
   direction: rtl;
@@ -104,10 +113,7 @@ a[dir="ltr"] { display: inline-block; direction: ltr; unicode-bidi: isolate; }
 .hero {
   min-height: 100vh; display: flex; align-items: center; justify-content: center;
   text-align: center; padding: 100px 24px 60px;
-  background:
-    radial-gradient(ellipse at 20% 30%, rgba(212,168,83,0.08) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 70%, rgba(212,168,83,0.05) 0%, transparent 50%),
-    var(--bg-gradient);
+  background: transparent;
 }
 .hero-inner { max-width: 700px; }
 .hero-badge {
