@@ -420,6 +420,80 @@ app.put('/api/me', (ctx) => {
   ctx.json({ ok: true, user: db.publicUser(updated) });
 });
 
+app.get('/api/me/insurance', (ctx) => {
+  const u = needMember(ctx);
+  if (!u) return;
+  const ins = db.getUserInsurance(u.id);
+  ctx.json({ ok: true, ...(ins || { has_insurance: false, file_data: null, file_name: null, updated_at: null }) });
+});
+
+function saveInsuranceHandler(ctx) {
+  const u = needMember(ctx);
+  if (!u) return;
+  if (u.impersonated) return bad(ctx, 'برای تغییر فایل بیمه ورزشی باید مستقیماً وارد حساب خود شوید', 403);
+  const b = ctx.body || {};
+  const fileData = String(b.file_data || '').trim();
+  if (!fileData) return bad(ctx, 'لطفاً یک فایل انتخاب کنید');
+  if (fileData.length > 2500000) {
+    return bad(ctx, 'حجم فایل بیمه نباید بیشتر از ۱.۸ مگابایت باشد');
+  }
+  if (!/^data:(image\/(png|jpeg|jpg|webp)|application\/pdf);base64,[A-Za-z0-9+/=]+$/.test(fileData)) {
+    return bad(ctx, 'فرمت فایل مجاز نیست؛ فقط تصویر (PNG، JPG، WEBP) یا PDF مجاز است');
+  }
+  const fileName = sanitize(String(b.file_name || 'insurance-card').trim()).slice(0, 120) || 'insurance-card';
+  const updated = db.setUserInsurance(u.id, { fileData, fileName });
+  db.logActivity(u.id, u.full_name, 'فایل بیمه ورزشی ثبت کرد', fileName);
+  ctx.json({ ok: true, user: db.publicUser(updated) });
+}
+app.post('/api/me/insurance', saveInsuranceHandler);
+app.put('/api/me/insurance', saveInsuranceHandler);
+
+app.delete('/api/me/insurance', (ctx) => {
+  const u = needMember(ctx);
+  if (!u) return;
+  if (u.impersonated) return bad(ctx, 'برای حذف فایل بیمه ورزشی باید مستقیماً وارد حساب خود شوید', 403);
+  const updated = db.setUserInsurance(u.id, { fileData: null, fileName: null });
+  db.logActivity(u.id, u.full_name, 'فایل بیمه ورزشی را حذف کرد', null);
+  ctx.json({ ok: true, user: db.publicUser(updated) });
+});
+
+app.get('/api/me/photo', (ctx) => {
+  const u = needMember(ctx);
+  if (!u) return;
+  const photo = db.getUserPhoto(u.id);
+  if (!photo || !photo.photo_data) return bad(ctx, 'عکس پروفایل ثبت نشده است', 404);
+  ctx.image(photo.photo_data);
+});
+
+function savePhotoHandler(ctx) {
+  const u = needMember(ctx);
+  if (!u) return;
+  if (u.impersonated) return bad(ctx, 'برای تغییر عکس پروفایل باید مستقیماً وارد حساب خود شوید', 403);
+  const b = ctx.body || {};
+  const photoData = String(b.photo_data || '').trim();
+  if (!photoData) return bad(ctx, 'لطفاً یک تصویر انتخاب کنید');
+  if (photoData.length > 1400000) {
+    return bad(ctx, 'حجم عکس پروفایل نباید بیشتر از ۱ مگابایت باشد');
+  }
+  if (!/^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/.test(photoData)) {
+    return bad(ctx, 'فرمت تصویر مجاز نیست؛ فقط PNG، JPG یا WEBP مجاز است');
+  }
+  const updated = db.setUserPhoto(u.id, photoData);
+  db.logActivity(u.id, u.full_name, 'عکس پروفایل خود را ذخیره کرد', null);
+  ctx.json({ ok: true, user: db.publicUser(updated) });
+}
+app.post('/api/me/photo', savePhotoHandler);
+app.put('/api/me/photo', savePhotoHandler);
+
+app.delete('/api/me/photo', (ctx) => {
+  const u = needMember(ctx);
+  if (!u) return;
+  if (u.impersonated) return bad(ctx, 'برای حذف عکس پروفایل باید مستقیماً وارد حساب خود شوید', 403);
+  const updated = db.setUserPhoto(u.id, null);
+  db.logActivity(u.id, u.full_name, 'عکس پروفایل را حذف کرد', null);
+  ctx.json({ ok: true, user: db.publicUser(updated) });
+});
+
 app.post('/api/password', (ctx) => {
   const u = needMember(ctx);
   if (!u) return;

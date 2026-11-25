@@ -212,7 +212,7 @@
               <div class="card-head"><div class="card-title"><span class="dot" style="background:var(--green);box-shadow:0 0 10px var(--green)"></span> آخرین تمرینات تکمیل‌شده</div></div>
               ${d.doneFeed.length ? d.doneFeed.map((f) => `
                 <div class="list-item">
-                  ${avatar({ full_name: f.full_name, avatar_color: f.avatar_color }, 'sm')}
+                  ${avatar({ id: f.user_id, full_name: f.full_name, avatar_color: f.avatar_color, has_photo: f.has_photo, photo_updated_at: f.photo_updated_at }, 'sm')}
                   <div class="grow">
                     <div class="title">${esc(f.full_name)} — ${esc(f.plan_title)}</div>
                     <div class="tiny">${J.timeAgo(f.completed_at)} ${f.member_note ? '· ' + esc(f.member_note) : ''}</div>
@@ -239,7 +239,7 @@
               <div class="card-head"><div class="card-title"><span class="dot" style="background:var(--blue);box-shadow:0 0 10px var(--blue)"></span> تازه‌ترین شاگردان</div></div>
               ${d.latestMembers.map((m) => `
                 <div class="list-item">
-                  ${avatar({ full_name: m.full_name, avatar_color: m.avatar_color }, 'sm')}
+                  ${avatar({ id: m.id, full_name: m.full_name, avatar_color: m.avatar_color, has_photo: m.has_photo, photo_updated_at: m.photo_updated_at }, 'sm')}
                   <div class="grow">
                     <div class="title">${esc(m.full_name)}</div>
                     <div class="tiny">@${esc(m.username)} · ${esc(m.belt || '—')} · عضویت ${J.formatShort(m.created_at)}</div>
@@ -534,9 +534,11 @@
           </div>
         </div>
 
-        <div class="row wrap" style="margin-bottom:16px">
+        <div class="row wrap" style="margin-bottom:16px;gap:12px;align-items:center">
           <span>تاریخ تولد: <b dir="ltr">${esc(m.birth_date ? fa(UI.birthDateValue(m.birth_date)) : '—')}</b></span>
           <span>گروه خونی: <b dir="ltr">${esc(m.blood_group || '—')}</b></span>
+          <span>بیمه ورزشی: ${m.has_insurance ? `<span class="badge green">ثبت شده</span> <button type="button" class="btn sm ghost" id="coachViewInsuranceBtn">مشاهده فایل بیمه</button>` : '<span class="badge dark">ثبت نشده</span>'}</span>
+          ${m.has_photo ? `<button type="button" class="btn sm ghost" id="coachViewPhotoBtn">مشاهده عکس پروفایل</button>` : ''}
         </div>
         <div class="grid-4" style="margin-bottom:16px">
           ${statTile('میانگین سال', d.progress && Object.keys(d.progress).length ? fa(avgOf(d.progress)) : '—', `سال ${fa(d.year)}`, 'var(--gold)')}
@@ -587,7 +589,38 @@
         { label: 'بازنشانی رمز', class: '', onClick: () => resetPassword(m) },
         { label: 'ورود به پنل شاگرد', class: '', onClick: () => impersonate(m) },
         { label: 'ویرایش اطلاعات', class: 'primary', onClick: () => memberForm(m) }
-      ]
+      ],
+      onMount: (overlay) => {
+        const photoBtn = overlay.querySelector('#coachViewPhotoBtn');
+        if (photoBtn) {
+          photoBtn.addEventListener('click', () => {
+            const src = `${PATH_PREFIX}/api/members/${m.id}/photo?v=${encodeURIComponent(m.photo_updated_at || Date.now())}`;
+            modal({
+              title: 'عکس پروفایل — ' + m.full_name,
+              body: `<div style="text-align:center"><img src="${esc(src)}" alt="${esc(m.full_name)}" style="max-width:100%;max-height:70vh;border-radius:16px"></div>`,
+              actions: [{ label: 'بستن', class: 'ghost', onClick: closeModal }]
+            });
+          });
+        }
+        const insBtn = overlay.querySelector('#coachViewInsuranceBtn');
+        if (insBtn) {
+          insBtn.addEventListener('click', async () => {
+            try {
+              const ins = await api('/api/members/' + m.id + '/insurance');
+              if (!ins.file_data) return toast('فایل بیمه ثبت نشده است', 'warn');
+              const isPdf = ins.file_data.startsWith('data:application/pdf');
+              modal({
+                title: 'بیمه ورزشی — ' + m.full_name,
+                wide: true,
+                body: isPdf
+                  ? `<div class="stack" style="gap:12px"><p class="small">فایل PDF ثبت‌شده: <b>${esc(ins.file_name || 'insurance.pdf')}</b></p><a href="${ins.file_data}" download="${esc(ins.file_name || 'insurance.pdf')}" class="btn primary">دانلود / باز کردن فایل PDF</a></div>`
+                  : `<div style="text-align:center"><img src="${ins.file_data}" alt="بیمه ورزشی" style="max-width:100%;max-height:70vh;border-radius:12px"></div>`,
+                actions: [{ label: 'بستن', class: 'ghost', onClick: closeModal }]
+              });
+            } catch (err) { toast(err.message, 'warn'); }
+          });
+        }
+      }
     });
   }
 

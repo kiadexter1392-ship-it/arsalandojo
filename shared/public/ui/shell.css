@@ -350,13 +350,26 @@ button[type="submit"]:disabled, .btn:disabled { cursor: wait; opacity: 0.72; }
 /* ── Avatar ── */
 .avatar {
   display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; flex-shrink: 0; font-size: 15px;
   border-radius: 50%; font-weight: 700;
   background: var(--c, var(--gold));
   color: #fff;
+  position: relative;
+  overflow: hidden;
   box-shadow: 0 4px 12px rgba(0,0,0,0.1);
 }
 .avatar.sm { width: 32px; height: 32px; font-size: 13px; }
 .avatar.lg { width: 56px; height: 56px; font-size: 22px; }
+.avatar.xl { width: 84px; height: 84px; font-size: 28px; }
+.avatar-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
+}
 
 /* ── Drawer List (Modal) ── */
 .drawer-list { display: flex; flex-direction: column; }

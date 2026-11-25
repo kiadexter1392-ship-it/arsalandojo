@@ -204,6 +204,7 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
   }
   function resolveDojoSportAssetPath(img){
     if(!img) return '';
+    if(img.classList && img.classList.contains('avatar-img')) return '';
     var alt=(img.getAttribute('alt')||'').trim();
     var rect=img.getBoundingClientRect ? img.getBoundingClientRect() : {width:0,height:0};
     if(rect.width>0 && rect.width<=48 && rect.height>0 && rect.height<=48 && !alt) return '';

@@ -135,7 +135,19 @@
 
   function avatar(user, size = '') {
     const c = (user && user.avatar_color) || '#e2483d';
-    return `<span class="avatar ${size}" style="--c:${esc(c)}">${esc(initials(user && user.full_name))}</span>`;
+    let img = '';
+    if (user && user.has_photo) {
+      const isCoach = typeof document !== 'undefined' && document.body && document.body.classList.contains('coach-panel');
+      const ver = user.photo_updated_at ? '?v=' + encodeURIComponent(user.photo_updated_at) : '';
+      let src = '';
+      if (isCoach && user.role !== 'coach' && (user.user_id || user.id)) {
+        src = PATH_PREFIX + '/api/members/' + encodeURIComponent(user.user_id || user.id) + '/photo' + ver;
+      } else if (!isCoach && user.role !== 'coach') {
+        src = PATH_PREFIX + '/api/me/photo' + ver;
+      }
+      if (src) img = `<img class="avatar-img" src="${esc(src)}" alt="${esc((user && user.full_name) || 'تصویر پروفایل')}">`;
+    }
+    return `<span class="avatar ${size}" style="--c:${esc(c)}">${esc(initials(user && user.full_name))}${img}</span>`;
   }
 
   const STATUS = {

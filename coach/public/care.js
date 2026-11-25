@@ -225,7 +225,7 @@
                 <div class="card" style="background:var(--bg-2);padding:16px" data-receipt-card="${r.id}">
                   <div class="row between wrap" style="gap:12px">
                     <div class="row" style="gap:10px">
-                      ${avatar({ full_name: r.full_name, avatar_color: r.avatar_color }, 'sm')}
+                      ${avatar({ user_id: r.user_id, full_name: r.full_name, avatar_color: r.avatar_color, has_photo: r.has_photo, photo_updated_at: r.photo_updated_at }, 'sm')}
                       <div>
                         <div class="bold">${esc(r.full_name)} <span class="badge ${st.cls}">${esc(st.label)}</span></div>
                         <div class="tiny muted">

@@ -98,6 +98,11 @@ CREATE TABLE IF NOT EXISTS users (
   join_date      TEXT,
   notes          TEXT,
   avatar_color   TEXT DEFAULT '#e2483d',
+  avatar_photo   TEXT,
+  avatar_updated_at TEXT,
+  insurance_file TEXT,
+  insurance_file_name TEXT,
+  insurance_updated_at TEXT,
   active         INTEGER NOT NULL DEFAULT 1,
   created_at     TEXT NOT NULL,
   updated_at     TEXT NOT NULL
@@ -291,6 +296,21 @@ try {
   if (!all("PRAGMA table_info('users')").some(c => c.name === 'email')) {
     db.exec('ALTER TABLE users ADD COLUMN email TEXT DEFAULT NULL');
   }
+  if (!all("PRAGMA table_info('users')").some(c => c.name === 'avatar_photo')) {
+    db.exec('ALTER TABLE users ADD COLUMN avatar_photo TEXT DEFAULT NULL');
+  }
+  if (!all("PRAGMA table_info('users')").some(c => c.name === 'avatar_updated_at')) {
+    db.exec('ALTER TABLE users ADD COLUMN avatar_updated_at TEXT DEFAULT NULL');
+  }
+  if (!all("PRAGMA table_info('users')").some(c => c.name === 'insurance_file')) {
+    db.exec('ALTER TABLE users ADD COLUMN insurance_file TEXT DEFAULT NULL');
+  }
+  if (!all("PRAGMA table_info('users')").some(c => c.name === 'insurance_file_name')) {
+    db.exec('ALTER TABLE users ADD COLUMN insurance_file_name TEXT DEFAULT NULL');
+  }
+  if (!all("PRAGMA table_info('users')").some(c => c.name === 'insurance_updated_at')) {
+    db.exec('ALTER TABLE users ADD COLUMN insurance_updated_at TEXT DEFAULT NULL');
+  }
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(lower(email)) WHERE email IS NOT NULL AND email != ''");
   db.exec('COMMIT');
 } catch (err) {
@@ -394,7 +414,12 @@ function publicUser(u) {
     join_date: u.join_date,
     notes: u.notes,
     avatar_color: u.avatar_color,
+    has_photo: !!u.avatar_photo,
+    photo_updated_at: u.avatar_updated_at || null,
     discipline: u.discipline || null,
+    has_insurance: !!u.insurance_file,
+    insurance_file_name: u.insurance_file_name || null,
+    insurance_updated_at: u.insurance_updated_at || null,
     active: !!u.active,
     created_at: u.created_at
   };
@@ -473,6 +498,52 @@ function updateUser(id, data) {
   values.push(Number(id));
   run(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, ...values);
   if (data.active === false || data.active === 0) run('DELETE FROM sessions WHERE user_id=?',Number(id));
+  return findById(id);
+}
+
+function getUserInsurance(id) {
+  const row = get('SELECT id, insurance_file, insurance_file_name, insurance_updated_at FROM users WHERE id = ?', Number(id));
+  if (!row) return null;
+  return {
+    has_insurance: !!row.insurance_file,
+    file_data: row.insurance_file || null,
+    file_name: row.insurance_file_name || null,
+    updated_at: row.insurance_updated_at || null
+  };
+}
+
+function setUserInsurance(id, { fileData = null, fileName = null } = {}) {
+  const ts = now();
+  run(
+    'UPDATE users SET insurance_file = ?, insurance_file_name = ?, insurance_updated_at = ?, updated_at = ? WHERE id = ?',
+    fileData || null,
+    fileData ? (fileName || null) : null,
+    fileData ? ts : null,
+    ts,
+    Number(id)
+  );
+  return findById(id);
+}
+
+function getUserPhoto(id) {
+  const row = get('SELECT id, avatar_photo, avatar_updated_at FROM users WHERE id = ?', Number(id));
+  if (!row) return null;
+  return {
+    has_photo: !!row.avatar_photo,
+    photo_data: row.avatar_photo || null,
+    updated_at: row.avatar_updated_at || null
+  };
+}
+
+function setUserPhoto(id, photoData = null) {
+  const ts = now();
+  run(
+    'UPDATE users SET avatar_photo = ?, avatar_updated_at = ?, updated_at = ? WHERE id = ?',
+    photoData || null,
+    photoData ? ts : null,
+    ts,
+    Number(id)
+  );
   return findById(id);
 }
 
@@ -726,6 +797,7 @@ function listTuitionReceipts({ user_id, status, year, month, limit = 100 } = {})
   params.push(Number(limit));
   return all(
     `SELECT r.*, u.full_name, u.username, u.discipline, u.belt, u.avatar_color,
+            (u.avatar_photo IS NOT NULL AND u.avatar_photo != '') AS has_photo, u.avatar_updated_at AS photo_updated_at,
             rv.full_name AS reviewer_name
      FROM tuition_receipts r
      JOIN users u ON u.id = r.user_id
@@ -1030,6 +1102,8 @@ module.exports = {
   all, get, run, now,
   hashPassword, verifyPassword,
   findByUsername, findByEmail, normalizeEmail, findById, publicUser, createUser, updateUser, listMembers,
+  getUserInsurance, setUserInsurance,
+  getUserPhoto, setUserPhoto,
   createSession, sessionUser, renewSession, destroySession, setPassword,
   createAnnouncement, getAnnouncement, listAnnouncements, announcementsFor,
   markAnnouncementRead, updateAnnouncement, deleteAnnouncement,

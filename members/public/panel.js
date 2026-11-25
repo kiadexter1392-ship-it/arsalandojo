@@ -832,7 +832,22 @@
     box.innerHTML = `
       <div class="split">
         <div class="card">
-          <div class="card-head"><div class="card-title"><span class="dot"></span> اطلاعات من</div></div>
+          <div class="card-head">
+            <div class="card-title"><span class="dot"></span> اطلاعات من</div>
+            <span class="badge ${ME.has_photo ? 'green' : 'dark'}">${ME.has_photo ? 'عکس ثبت شده' : 'بدون عکس'}</span>
+          </div>
+          <div class="row wrap" style="gap:14px;padding:12px 14px;border-radius:14px;background:var(--bg-2);border:1px solid var(--line);margin-bottom:16px">
+            ${avatar(ME, 'xl')}
+            <div class="grow" style="min-width:190px">
+              <div class="bold">عکس پروفایل</div>
+              <div class="tiny muted" style="margin-top:4px">عکس ذخیره شده در پنل شما و در پروفایل شاگرد برای مربی نمایش داده می‌شود.</div>
+              <div class="row wrap" style="gap:8px;margin-top:10px">
+                <label for="profilePhotoInput" class="btn sm primary" id="profilePhotoLabel">${ME.has_photo ? 'تغییر عکس پروفایل' : 'انتخاب و ذخیره عکس'}</label>
+                <input type="file" id="profilePhotoInput" accept="image/png,image/jpeg,image/webp" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden">
+                ${ME.has_photo ? '<button type="button" class="btn sm ghost" id="viewProfilePhotoBtn">مشاهده عکس</button><button type="button" class="btn sm ghost" id="deleteProfilePhotoBtn">حذف عکس</button>' : ''}
+              </div>
+            </div>
+          </div>
           <form id="profileForm" class="col" style="gap:12px">
             <div class="grid-2">
               <div class="field"><label>نام و نام خانوادگی</label><input name="full_name" value="${esc(ME.full_name)}"></div>
@@ -869,6 +884,33 @@
 
         <div class="stack">
           <div class="card">
+            <div class="card-head">
+              <div class="card-title"><span class="dot" style="background:var(--green);box-shadow:0 0 10px var(--green)"></span> ثبت بیمه ورزشی</div>
+              <span class="badge ${ME.has_insurance ? 'green' : 'dark'}">${ME.has_insurance ? 'ثبت شده ✓' : 'ثبت نشده'}</span>
+            </div>
+            ${ME.has_insurance ? `
+              <div style="padding:10px 12px;border-radius:10px;background:var(--bg-2);border:1px solid var(--line);margin-bottom:12px">
+                <div class="small bold" style="word-break:break-word">${esc(ME.insurance_file_name || 'فایل بیمه ورزشی')}</div>
+                <div class="tiny muted" style="margin-top:4px">${ME.insurance_updated_at ? 'ثبت‌شده: ' + J.timeAgo(ME.insurance_updated_at) : ''}</div>
+                <div class="row wrap" style="gap:8px;margin-top:10px">
+                  <button type="button" class="btn sm primary" id="viewInsuranceBtn">مشاهده فایل بیمه</button>
+                  <button type="button" class="btn sm ghost" id="deleteInsuranceBtn">حذف</button>
+                </div>
+              </div>` : ''}
+            <form id="insuranceForm" class="col" style="gap:10px">
+              <div class="field">
+                <label for="insuranceFileInput">${ME.has_insurance ? 'جایگزینی فایل بیمه ورزشی (تصویر یا PDF)' : 'فایل کارت بیمه ورزشی (تصویر یا PDF)'}</label>
+                <input type="file" id="insuranceFileInput" accept="image/png,image/jpeg,image/webp,application/pdf" required>
+              </div>
+              <div><button class="btn primary" type="submit" id="insuranceSubmitBtn">ثبت فایل بیمه ورزشی</button></div>
+            </form>
+            <div style="margin-top:14px;padding:12px 14px;border-radius:12px;background:var(--bg-2);border:1px solid var(--line);display:flex;flex-direction:column;gap:6px">
+              <span class="small bold">بیمه نداری؟</span>
+              <a href="https://athlete.ifsm.ir" target="_blank" rel="noopener noreferrer" class="small" style="color:var(--gold);font-weight:700;text-decoration:none;word-break:break-word">بیمه - فدراسیون پزشکی ورزشی جمهوری اسلامی ایران - Ifsm.ir ↗</a>
+            </div>
+          </div>
+
+          <div class="card">
             <div class="card-head"><div class="card-title"><span class="dot" style="background:var(--gold);box-shadow:0 0 10px var(--gold)"></span> تغییر رمز عبور</div></div>
             <form id="passForm" class="col" style="gap:12px">
               <div class="field"><label>رمز فعلی</label><input type="password" name="current" class="en" required></div>
@@ -890,6 +932,192 @@
 
     if (window.MemberExtras) {
       window.MemberExtras.renderPwaCard(box.querySelector('#profilePwaSlot'), { alwaysShowIfEligible: true });
+    }
+
+    function readInsuranceFile(file) {
+      return new Promise((resolve, reject) => {
+        if (!file) return reject(new Error('فایلی انتخاب نشده است'));
+        const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
+        const isImg = /^image\/(png|jpeg|jpg|webp)$/i.test(file.type || '');
+        if (!isPdf && !isImg) {
+          return reject(new Error('فقط فایل تصویر (PNG، JPG، WEBP) یا PDF مجاز است'));
+        }
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('خواندن فایل ناموفق بود'));
+        reader.onload = () => {
+          const raw = String(reader.result || '');
+          if (isPdf) {
+            if (raw.length > 2500000) {
+              return reject(new Error('حجم فایل PDF نباید بیشتر از ۱.۸ مگابایت باشد'));
+            }
+            return resolve(raw);
+          }
+          const img = new Image();
+          img.onerror = () => reject(new Error('فایل تصویر معتبر نیست'));
+          img.onload = () => {
+            const maxDim = 1400;
+            let w = img.width;
+            let h = img.height;
+            if (w > maxDim || h > maxDim) {
+              const sc = Math.min(maxDim / w, maxDim / h);
+              w = Math.max(1, Math.round(w * sc));
+              h = Math.max(1, Math.round(h * sc));
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+            if (dataUrl.length > 2500000) {
+              return reject(new Error('حجم تصویر پس از فشرده‌سازی همچنان زیاد است'));
+            }
+            resolve(dataUrl);
+          };
+          img.src = raw;
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    box.querySelector('#insuranceForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const inp = box.querySelector('#insuranceFileInput');
+      const btn = box.querySelector('#insuranceSubmitBtn');
+      const file = inp?.files?.[0];
+      if (!file) return toast('لطفاً فایل بیمه ورزشی را انتخاب کنید', 'warn');
+      if (btn) { btn.disabled = true; btn.textContent = 'در حال ارسال...'; }
+      try {
+        const fileData = await readInsuranceFile(file);
+        const r = await api('/api/me/insurance', {
+          method: 'POST',
+          body: { file_data: fileData, file_name: file.name || 'insurance-card' }
+        });
+        ME = r.user;
+        toast('فایل بیمه ورزشی در پروفایل ثبت شد', 'ok');
+        renderProfile(box);
+      } catch (err) {
+        toast(err.message, 'warn', 5000);
+        if (btn) { btn.disabled = false; btn.textContent = 'ثبت فایل بیمه ورزشی'; }
+      }
+    });
+
+    const viewInsBtn = box.querySelector('#viewInsuranceBtn');
+    if (viewInsBtn) {
+      viewInsBtn.addEventListener('click', async () => {
+        try {
+          const ins = await api('/api/me/insurance');
+          if (!ins.file_data) return toast('فایلی پیدا نشد', 'warn');
+          const isPdf = ins.file_data.startsWith('data:application/pdf');
+          modal({
+            title: 'فایل بیمه ورزشی',
+            wide: true,
+            body: isPdf
+              ? `<div class="stack" style="gap:12px"><p class="small">فایل PDF ثبت‌شده: <b>${esc(ins.file_name || 'insurance.pdf')}</b></p><a href="${ins.file_data}" download="${esc(ins.file_name || 'insurance.pdf')}" class="btn primary">دانلود / باز کردن فایل PDF</a></div>`
+              : `<div style="text-align:center"><img src="${ins.file_data}" alt="بیمه ورزشی" style="max-width:100%;max-height:70vh;border-radius:12px"></div>`,
+            actions: [{ label: 'بستن', class: 'ghost', onClick: closeModal }]
+          });
+        } catch (err) {
+          toast(err.message, 'warn');
+        }
+      });
+    }
+
+    const delInsBtn = box.querySelector('#deleteInsuranceBtn');
+    if (delInsBtn) {
+      delInsBtn.addEventListener('click', async () => {
+        try {
+          const r = await api('/api/me/insurance', { method: 'DELETE' });
+          ME = r.user;
+          toast('فایل بیمه ورزشی حذف شد', 'ok');
+          renderProfile(box);
+        } catch (err) {
+          toast(err.message, 'warn');
+        }
+      });
+    }
+
+    function compressProfilePhoto(file) {
+      return new Promise((resolve, reject) => {
+        if (!file) return reject(new Error('تصویری انتخاب نشده است'));
+        if (!/^image\/(png|jpeg|jpg|webp)$/i.test(file.type || '')) {
+          return reject(new Error('فقط تصویر PNG، JPG یا WEBP مجاز است'));
+        }
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('خواندن تصویر ناموفق بود'));
+        reader.onload = () => {
+          const img = new Image();
+          img.onerror = () => reject(new Error('فایل تصویر معتبر نیست'));
+          img.onload = () => {
+            const maxDim = 720;
+            let w = img.width;
+            let h = img.height;
+            if (w > maxDim || h > maxDim) {
+              const sc = Math.min(maxDim / w, maxDim / h);
+              w = Math.max(1, Math.round(w * sc));
+              h = Math.max(1, Math.round(h * sc));
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.86);
+            if (dataUrl.length > 1400000) {
+              return reject(new Error('حجم عکس حتی پس از بهینه‌سازی بیش از حد مجاز است'));
+            }
+            resolve(dataUrl);
+          };
+          img.src = String(reader.result || '');
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    const photoInput = box.querySelector('#profilePhotoInput');
+    if (photoInput) {
+      photoInput.addEventListener('change', async () => {
+        const file = photoInput.files && photoInput.files[0];
+        if (!file) return;
+        const lbl = box.querySelector('#profilePhotoLabel');
+        if (lbl) { lbl.textContent = 'در حال ذخیره...'; }
+        try {
+          const photoData = await compressProfilePhoto(file);
+          const r = await api('/api/me/photo', { method: 'POST', body: { photo_data: photoData } });
+          ME = r.user;
+          document.getElementById('meAvatar').innerHTML = UI.avatar(ME);
+          toast('عکس پروفایل ذخیره شد', 'ok');
+          renderProfile(box);
+        } catch (err) {
+          toast(err.message, 'warn', 5000);
+          if (lbl) { lbl.textContent = ME.has_photo ? 'تغییر عکس پروفایل' : 'انتخاب و ذخیره عکس'; }
+        }
+      });
+    }
+
+    const viewPhotoBtn = box.querySelector('#viewProfilePhotoBtn');
+    if (viewPhotoBtn) {
+      viewPhotoBtn.addEventListener('click', () => {
+        const src = `${UI.PATH_PREFIX}/api/me/photo?v=${encodeURIComponent(ME.photo_updated_at || Date.now())}`;
+        modal({
+          title: 'عکس پروفایل من',
+          body: `<div style="text-align:center"><img src="${esc(src)}" alt="${esc(ME.full_name)}" style="max-width:100%;max-height:70vh;border-radius:16px"></div>`,
+          actions: [{ label: 'بستن', class: 'ghost', onClick: closeModal }]
+        });
+      });
+    }
+
+    const delPhotoBtn = box.querySelector('#deleteProfilePhotoBtn');
+    if (delPhotoBtn) {
+      delPhotoBtn.addEventListener('click', async () => {
+        try {
+          const r = await api('/api/me/photo', { method: 'DELETE' });
+          ME = r.user;
+          document.getElementById('meAvatar').innerHTML = UI.avatar(ME);
+          toast('عکس پروفایل حذف شد', 'ok');
+          renderProfile(box);
+        } catch (err) {
+          toast(err.message, 'warn');
+        }
+      });
     }
 
     box.querySelector('#profileForm').addEventListener('submit', async (e) => {

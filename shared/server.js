@@ -232,6 +232,20 @@ function createServer(options = {}) {
       file(filePath, status) {
         if (setCookies.length) res.setHeader('Set-Cookie', setCookies);
         sendFile(res, filePath, status);
+      },
+      image(dataUrl, status = 200) {
+        const m = /^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
+        if (!m) return json(res, { ok: false, error: 'فرمت تصویر نامعتبر است' }, 400, setCookies);
+        const mime = m[1] === 'image/jpg' ? 'image/jpeg' : m[1];
+        const buf = Buffer.from(m[2], 'base64');
+        if (setCookies.length) res.setHeader('Set-Cookie', setCookies);
+        res.writeHead(status, {
+          'Content-Type': mime,
+          'Content-Length': buf.length,
+          'Cache-Control': 'private, max-age=300',
+          ...SECURITY_HEADERS
+        });
+        res.end(buf);
       }
     };
 

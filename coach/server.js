@@ -252,7 +252,7 @@ app.get('/api/overview', (ctx) => {
   if (!u) return;
   const j = todayJalali();
   const doneFeed = db.all(
-    `SELECT pa.*, u.full_name, u.avatar_color, u.belt, p.title AS plan_title
+    `SELECT pa.*, u.full_name, u.avatar_color, (u.avatar_photo IS NOT NULL AND u.avatar_photo != '') AS has_photo, u.avatar_updated_at AS photo_updated_at, u.belt, p.title AS plan_title
      FROM plan_assignments pa JOIN users u ON u.id = pa.user_id JOIN plans p ON p.id = pa.plan_id
      WHERE pa.verified=1 AND p.verified=1 AND u.verified=1 AND pa.status = 'done' ORDER BY pa.completed_at DESC LIMIT 8`
   );
@@ -261,7 +261,7 @@ app.get('/api/overview', (ctx) => {
      WHERE sr.verified=1 AND u.verified=1 ORDER BY sr.created_at DESC LIMIT 8`
   );
   const latestMembers = db.all(
-    "SELECT id, full_name, username, belt, avatar_color, join_date, created_at FROM users WHERE verified=1 AND role='member' ORDER BY created_at DESC LIMIT 5"
+    "SELECT id, full_name, username, belt, avatar_color, (avatar_photo IS NOT NULL AND avatar_photo != '') AS has_photo, avatar_updated_at AS photo_updated_at, join_date, created_at FROM users WHERE verified=1 AND role='member' ORDER BY created_at DESC LIMIT 5"
   );
   const pendingReceipts = db.get(
     "SELECT COUNT(*) AS c FROM tuition_receipts r JOIN users u ON u.id = r.user_id WHERE r.status = 'pending' AND u.verified = 1"
@@ -275,6 +275,8 @@ app.get('/api/overview', (ctx) => {
       discipline: m.discipline || m.style || '',
       belt: m.belt || '',
       avatar_color: m.avatar_color,
+      has_photo: !!m.avatar_photo,
+      photo_updated_at: m.avatar_updated_at || null,
       ...care
     };
   }).filter((m) => m.needs_absence_followup || m.tuition_status === 'overdue' || m.tuition_status === 'due_soon');
@@ -384,6 +386,23 @@ app.get('/api/members/:id', (ctx) => {
   });
 });
 
+app.get('/api/members/:id/insurance', (ctx) => {
+  if (!needCoach(ctx)) return;
+  const m = db.findById(ctx.params.id);
+  if (!m || m.role !== 'member') return bad(ctx, 'شاگرد پیدا نشد', 404);
+  const ins = db.getUserInsurance(m.id);
+  ctx.json({ ok: true, ...(ins || { has_insurance: false, file_data: null, file_name: null, updated_at: null }) });
+});
+
+app.get('/api/members/:id/photo', (ctx) => {
+  if (!needCoach(ctx)) return;
+  const m = db.findById(ctx.params.id);
+  if (!m || m.role !== 'member') return bad(ctx, 'شاگرد پیدا نشد', 404);
+  const photo = db.getUserPhoto(m.id);
+  if (!photo || !photo.photo_data) return bad(ctx, 'عکس پروفایل ثبت نشده است', 404);
+  ctx.image(photo.photo_data);
+});
+
 app.put('/api/members/:id', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
@@ -480,6 +499,8 @@ app.get('/api/attendance', (ctx) => {
       discipline: m.discipline || m.style || '',
       belt: m.belt || '',
       avatar_color: m.avatar_color,
+      has_photo: !!m.avatar_photo,
+      photo_updated_at: m.avatar_updated_at || null,
       status: rec ? rec.status : null,
       note: rec ? (rec.note || '') : '',
       consecutive_absences: care.consecutive_absences,

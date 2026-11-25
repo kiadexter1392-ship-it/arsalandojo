@@ -255,6 +255,104 @@ const PNG_1PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfF
     const panelJs = await (await fetch(base + '/panel.js')).text();
     assert.match(panelJs, /new URLSearchParams\(location\.search\)\.get\('view'\)/);
     assert.ok(!panelJs.includes('۱۲ هر ماه'));
+    assert.ok(panelJs.includes('ثبت بیمه ورزشی'), 'panel.js must include sports insurance section');
+    assert.ok(panelJs.includes('بیمه نداری؟'), 'panel.js must include insurance prompt');
+    assert.ok(panelJs.includes('https://athlete.ifsm.ir'), 'panel.js must link to athlete.ifsm.ir');
+    assert.ok(panelJs.includes('بیمه - فدراسیون پزشکی ورزشی جمهوری اسلامی ایران - Ifsm.ir'), 'panel.js must display exact Ifsm.ir label');
+
+    const coachDashJs = await (await fetch(base + '/coach/dashboard.js')).text();
+    assert.ok(coachDashJs.includes('coachViewInsuranceBtn'), 'coach dashboard.js must include insurance viewer');
+
+    // 8. Sports Insurance (بیمه ورزشی) upload, isolation, coach view, and removal
+    assert.equal((await api('/api/me/insurance')).status, 401);
+    const badIns = await api('/api/me/insurance', {
+      file_data: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
+      file_name: 'bad.svg'
+    }, kiaCookie);
+    assert.equal(badIns.status, 400);
+
+    const savedIns = await api('/api/me/insurance', {
+      file_data: PNG_1PX,
+      file_name: 'bime-kia.png'
+    }, kiaCookie);
+    assert.equal(savedIns.status, 200, JSON.stringify(savedIns.body));
+    assert.equal(savedIns.body.user.has_insurance, true);
+    assert.equal(savedIns.body.user.insurance_file_name, 'bime-kia.png');
+
+    const kiaMeIns = await api('/api/me', null, kiaCookie);
+    assert.equal(kiaMeIns.body.user.has_insurance, true);
+    assert.equal(kiaMeIns.body.user.insurance_file_name, 'bime-kia.png');
+
+    const kiaOwnIns = await api('/api/me/insurance', null, kiaCookie);
+    assert.equal(kiaOwnIns.status, 200);
+    assert.equal(kiaOwnIns.body.has_insurance, true);
+    assert.equal(kiaOwnIns.body.file_data, PNG_1PX);
+
+    // Other member cannot read Kia's insurance via their own or coach endpoint
+    const otherIns = await api('/api/me/insurance', null, secondCookie);
+    assert.equal(otherIns.status, 200);
+    assert.equal(otherIns.body.has_insurance, false);
+    assert.equal((await api(`/coach/api/members/${kiaId}/insurance`, null, secondCookie)).status, 401);
+
+    // Coach can view Kia's uploaded insurance file
+    const coachViewIns = await api(`/coach/api/members/${kiaId}/insurance`, null, coachCookie);
+    assert.equal(coachViewIns.status, 200);
+    assert.equal(coachViewIns.body.has_insurance, true);
+    assert.equal(coachViewIns.body.file_data, PNG_1PX);
+    assert.equal(coachViewIns.body.file_name, 'bime-kia.png');
+
+    // Member can delete their uploaded insurance file
+    const delIns = await api('/api/me/insurance', null, kiaCookie, 'DELETE');
+    assert.equal(delIns.status, 200);
+    assert.equal(delIns.body.user.has_insurance, false);
+    const afterDelIns = await api('/api/me/insurance', null, kiaCookie);
+    assert.equal(afterDelIns.body.has_insurance, false);
+
+    // 9. Member Profile Photo (عکس پروفایل) upload, binary delivery, coach access, isolation & deletion
+    assert.equal((await fetch(base + '/api/me/photo')).status, 401);
+    const badPhoto = await api('/api/me/photo', {
+      photo_data: 'data:application/pdf;base64,JVBERi0xLjQK'
+    }, kiaCookie);
+    assert.equal(badPhoto.status, 400);
+
+    const savedPhoto = await api('/api/me/photo', { photo_data: PNG_1PX }, kiaCookie);
+    assert.equal(savedPhoto.status, 200, JSON.stringify(savedPhoto.body));
+    assert.equal(savedPhoto.body.user.has_photo, true);
+    assert.ok(savedPhoto.body.user.photo_updated_at);
+
+    const kiaMePhoto = await api('/api/me', null, kiaCookie);
+    assert.equal(kiaMePhoto.body.user.has_photo, true);
+
+    const ownPhotoRes = await fetch(base + '/api/me/photo', { headers: { cookie: kiaCookie } });
+    assert.equal(ownPhotoRes.status, 200);
+    assert.equal(ownPhotoRes.headers.get('content-type'), 'image/png');
+    const ownPhotoBytes = Buffer.from(await ownPhotoRes.arrayBuffer());
+    assert.deepEqual([...ownPhotoBytes.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
+
+    // Other member cannot access Kia's photo on /api/me/photo or coach photo endpoint
+    assert.equal((await fetch(base + '/api/me/photo', { headers: { cookie: secondCookie } })).status, 404);
+    assert.equal((await fetch(base + `/coach/api/members/${kiaId}/photo`, { headers: { cookie: secondCookie } })).status, 401);
+
+    // Coach can view Kia's uploaded photo and sees has_photo in /api/members
+    const coachMembersList = await api('/coach/api/members', null, coachCookie);
+    assert.equal(coachMembersList.body.members.find((m) => m.id === kiaId)?.has_photo, true);
+
+    const coachPhotoRes = await fetch(base + `/coach/api/members/${kiaId}/photo`, { headers: { cookie: coachCookie } });
+    assert.equal(coachPhotoRes.status, 200);
+    assert.equal(coachPhotoRes.headers.get('content-type'), 'image/png');
+    const coachPhotoBytes = Buffer.from(await coachPhotoRes.arrayBuffer());
+    assert.deepEqual(coachPhotoBytes, ownPhotoBytes);
+
+    // Member UI + Coach UI contain profile photo controls
+    assert.ok(panelJs.includes('profilePhotoInput'), 'panel.js must include profilePhotoInput');
+    assert.ok(coachDashJs.includes('coachViewPhotoBtn'), 'coach dashboard.js must include coachViewPhotoBtn');
+
+    // Member can delete their profile photo
+    const delPhoto = await api('/api/me/photo', null, kiaCookie, 'DELETE');
+    assert.equal(delPhoto.status, 200);
+    assert.equal(delPhoto.body.user.has_photo, false);
+    assert.equal((await fetch(base + '/api/me/photo', { headers: { cookie: kiaCookie } })).status, 404);
+    assert.equal((await fetch(base + `/coach/api/members/${kiaId}/photo`, { headers: { cookie: coachCookie } })).status, 404);
 
     const cardStackJs = await (await fetch(base + '/CardStack.js')).text();
     assert.ok(!cardStackJs.includes('Math.min(cards.length, 6)'), 'CardStack must not truncate at 6 cards');
@@ -288,7 +386,7 @@ const PNG_1PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfF
     assert.match(uiCss, /\.bank-back \.number[\s\S]*?white-space:\s*nowrap/);
     assert.match(uiCss, /\.payment-cta-btn/);
 
-    console.log('PASS: tuition receipts, attendance streaks, targeted notifications, coach reminders, filters, CSV exports, PWA manifests, 7 card artworks, mobile CardStack bounds & payment CTA');
+    console.log('PASS: tuition receipts, attendance streaks, targeted notifications, coach reminders, filters, CSV exports, PWA manifests, 7 card artworks, mobile CardStack bounds, payment CTA & sports insurance');
   } finally {
     child.kill('SIGTERM');
     fs.rmSync(dir, { recursive: true, force: true });
