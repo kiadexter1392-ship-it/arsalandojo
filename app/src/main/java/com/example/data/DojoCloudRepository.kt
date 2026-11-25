@@ -2,8 +2,6 @@ package com.example.data
 
 import android.content.Context
 import com.example.R
-import com.example.ai.MealPlanRequest
-import com.example.ai.MealPlanResult
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.DocumentSnapshot
@@ -70,34 +68,6 @@ class DojoCloudRepository(
         )
     }
 
-    fun observeMealPlans(userId: String): Flow<List<SavedMealPlanDoc>> = flow {
-        val uid = requireUserId()
-        check(uid == userId) { "Signed-in user mismatch while observing meal plans." }
-        val colRef = db.collection("users").document(uid).collection("mealPlans")
-        emitAll(
-            colRef.orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(50)
-                .snapshots()
-                .map { snapshot ->
-                    snapshot.toObjects(
-                        SavedMealPlanDoc::class.java,
-                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                    )
-                }
-                .catch { error ->
-                    val firestoreError = generateSequence(error) { it.cause }
-                        .filterIsInstance<FirebaseFirestoreException>()
-                        .firstOrNull()
-                    if (firestoreError == null && error is CancellationException) throw error
-                    val exceptionToLog = firestoreError ?: (error as? Exception)
-                    if (exceptionToLog != null && auth.currentUser?.uid == uid) {
-                        handleFirestoreError(exceptionToLog, OperationType.LIST, colRef.path)
-                    }
-                    throw error
-                }
-        )
-    }
-
     fun observeProgressLogs(userId: String): Flow<List<WorkoutProgressLogDoc>> = flow {
         val uid = requireUserId()
         check(uid == userId) { "Signed-in user mismatch while observing progress logs." }
@@ -156,145 +126,24 @@ class DojoCloudRepository(
                 }
                 docRef.set(createPayload).await()
             } else {
-                val updatePayload = buildMap<String, Any> {
-                    put("displayName", displayName)
-                    put("email", email)
-                    if (photoUrl != null) put("photoUrl", photoUrl)
-                    put("updatedAt", FieldValue.serverTimestamp())
+                val unchanged = existing.getString("displayName") == displayName &&
+                    existing.getString("email") == email &&
+                    (photoUrl == null || existing.getString("photoUrl") == photoUrl)
+                if (!unchanged) {
+                    val updatePayload = buildMap<String, Any> {
+                        put("displayName", displayName)
+                        put("email", email)
+                        if (photoUrl != null) put("photoUrl", photoUrl)
+                        put("updatedAt", FieldValue.serverTimestamp())
+                    }
+                    docRef.update(updatePayload).await()
                 }
-                docRef.update(updatePayload).await()
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.WRITE, docPath)
-            Result.failure(e)
-        }
-    }
-
-    suspend fun saveDietaryPreferences(
-        userId: String,
-        request: MealPlanRequest
-    ): Result<Unit> {
-        var docPath = "users/$userId"
-        return try {
-            val uid = requireUserId()
-            check(uid == userId) { "Signed-in user changed; refusing cross-user write." }
-            val docRef = db.collection("users").document(uid)
-            docPath = docRef.path
-
-            val goal = request.goal.trim().ifBlank { DEFAULT_GOAL }.take(120)
-            val mealCount = request.mealCount.coerceIn(1, 10).toLong()
-            val bodyStats = request.bodyStats.trim().take(400)
-            val preferredFoods = request.preferredFoods.trim().take(500)
-            val restrictions = request.restrictions.trim().take(400)
-            val extraNotes = request.extraNotes.trim().take(500)
-
-            val existing = docRef.get().await()
-            if (!existing.exists()) {
-                val user = auth.currentUser
-                val photoUrl = user?.photoUrl?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.take(500)
-                val createPayload = buildMap<String, Any> {
-                    put("userId", uid)
-                    put("displayName", (user?.displayName ?: "").trim().take(120))
-                    put("email", (user?.email ?: "").trim().take(200))
-                    if (photoUrl != null) put("photoUrl", photoUrl)
-                    put("goal", goal)
-                    put("mealCount", mealCount)
-                    put("bodyStats", bodyStats)
-                    put("preferredFoods", preferredFoods)
-                    put("restrictions", restrictions)
-                    put("extraNotes", extraNotes)
-                    put("createdAt", FieldValue.serverTimestamp())
-                    put("updatedAt", FieldValue.serverTimestamp())
-                }
-                docRef.set(createPayload).await()
-            } else {
-                docRef.update(
-                    mapOf(
-                        "goal" to goal,
-                        "mealCount" to mealCount,
-                        "bodyStats" to bodyStats,
-                        "preferredFoods" to preferredFoods,
-                        "restrictions" to restrictions,
-                        "extraNotes" to extraNotes,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
-            }
-            Result.success(Unit)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, docPath)
-            Result.failure(e)
-        }
-    }
-
-    suspend fun saveMealPlan(
-        userId: String,
-        request: MealPlanRequest,
-        plan: MealPlanResult
-    ): Result<String> {
-        var docPath = "users/$userId/mealPlans"
-        return try {
-            val uid = requireUserId()
-            check(uid == userId) { "Signed-in user changed; refusing cross-user write." }
-            val docRef = db.collection("users").document(uid).collection("mealPlans").document()
-            docPath = docRef.path
-
-            val boundedMeals = plan.meals.take(10).ifEmpty {
-                listOf(
-                    com.example.ai.MealItem(
-                        mealTitle = "وعده اصلی",
-                        timeRange = "",
-                        foods = listOf(plan.summary.ifBlank { "برنامه روزانه" }),
-                        calories = plan.dailyCalories,
-                        proteinGrams = 0,
-                        carbsGrams = 0,
-                        fatGrams = 0,
-                        notes = ""
-                    )
-                )
-            }
-
-            val mealsPayload = boundedMeals.map { meal ->
-                mapOf(
-                    "mealTitle" to meal.mealTitle.trim().take(120),
-                    "timeRange" to meal.timeRange.trim().take(80),
-                    "foods" to meal.foods.take(20).map { it.trim().take(200) },
-                    "calories" to meal.calories.coerceIn(0, 10000).toLong(),
-                    "proteinGrams" to meal.proteinGrams.coerceIn(0, 2000).toLong(),
-                    "carbsGrams" to meal.carbsGrams.coerceIn(0, 2000).toLong(),
-                    "fatGrams" to meal.fatGrams.coerceIn(0, 2000).toLong(),
-                    "notes" to meal.notes.trim().take(400)
-                )
-            }
-
-            val payload = mapOf(
-                "userId" to uid,
-                "goal" to request.goal.trim().ifBlank { DEFAULT_GOAL }.take(120),
-                "mealCount" to request.mealCount.coerceIn(1, 10).toLong(),
-                "planTitle" to plan.planTitle.trim().ifBlank { "برنامه غذایی هوشمند" }.take(200),
-                "summary" to plan.summary.trim().take(1000),
-                "dailyCalories" to plan.dailyCalories.coerceIn(0, 15000).toLong(),
-                "proteinTarget" to plan.proteinTarget.trim().take(80),
-                "carbsTarget" to plan.carbsTarget.trim().take(80),
-                "fatTarget" to plan.fatTarget.trim().take(80),
-                "hydrationTip" to plan.hydrationTip.trim().take(1000),
-                "coachTip" to plan.coachTip.trim().take(1000),
-                "meals" to mealsPayload,
-                "createdAt" to FieldValue.serverTimestamp(),
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-
-            docRef.set(payload).await()
-            Result.success(docRef.id)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.CREATE, docPath)
             Result.failure(e)
         }
     }

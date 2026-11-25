@@ -68,8 +68,8 @@ async function freePort(){const s=net.createServer().listen(0,'127.0.0.1');await
    const imp=db.createSession(m.id,'member',1);db.run('UPDATE sessions SET impersonated=1 WHERE token=?',imp.token);
    const impWellnessCookie=cookieM.split('=')[0]+'='+imp.token;await req(member,'/api/wellness/progress','GET',undefined,impWellnessCookie,403);
    db.destroySession(imp.token);
-   assert.equal((await req(member,'/api/wellness/meals','GET',undefined,cookieM)).data.available,false);
-   await req(member,'/api/wellness/meals','POST',{goal:'متنوع',meals:3,adult:true,consent:true},cookieM,503,wellnessHeaders);
+   await req(member,'/api/wellness/meals','GET',undefined,cookieM,404);
+   await req(member,'/api/wellness/meals','POST',{goal:'متنوع',meals:3,adult:true,consent:true},cookieM,404,wellnessHeaders);
    const cfg=(await req(member,'/api/academy/config','GET',undefined,cookieM)).data;
    assert.equal(cfg.paymentPortal,null);assert.equal(cfg.role,'member');
    const overview=(await req(coach,'/api/overview','GET',undefined,cookieC)).data;
@@ -269,9 +269,8 @@ async function freePort(){const s=net.createServer().listen(0,'127.0.0.1');await
      await page.locator('#selfBtn').click();
      assert.equal(await page.locator('#selfForm input[name=sessions]').inputValue(),'','no manufactured default session count');
      await page.locator('.overlay [data-close]').click();
-     await page.locator('.nav-item[data-view="meal"]').click();
-     await page.getByText('سرویس ساخت برنامه هنوز در سرور تنظیم نشده است.',{exact:false}).waitFor();
-     assert.equal(await page.locator('#mealForm').count(),0,'no fake AI generation without configuration');
+     assert.equal(await page.locator('.nav-item[data-view="meal"]').count(),0,'AI meal plan tab must be removed');
+     assert.equal(await page.locator('#view-meal').count(),0,'AI meal plan section must be removed');
      await page.locator('.nav-item[data-view="home"]').click();
      await page.locator('.member-overview-heading').waitFor();
      await page.locator('.csw-card[data-front]').waitFor();await page.locator('.csw-card[data-front]').focus();await page.keyboard.press('Enter');await page.locator('#sportAcademyDetails').waitFor();assert.ok(await page.locator('.overlay').textContent().then(t=>t.includes('چهره‌های شناخته‌شده')));await page.locator('[data-close]').click();

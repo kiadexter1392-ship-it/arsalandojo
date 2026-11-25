@@ -181,7 +181,10 @@
         <div class="form-group"><label>رمز عبور * <span class="req">(۶+ حرف)</span></label><input name="password" type="password" class="en" minlength="6" required autocomplete="new-password"></div>
         <div class="form-group"><label>تکرار رمز *</label><input name="password2" type="password" class="en" minlength="6" required autocomplete="new-password"></div>
       </div>
-      <button type="submit" class="btn btn-gold btn-full" id="registerBtn">ثبت‌نام</button>
+      <div class="form-row">
+        <div class="form-group" style="grid-column:1/-1"><label for="rEmail">جیمیل (برای ورود مستقیم با گوگل)</label><input id="rEmail" name="email" type="email" class="en" dir="ltr" placeholder="example@gmail.com" autocomplete="email"></div>
+      </div>
+      <button type="submit" class="btn btn-gold btn-full" id="registerBtn">ثبت‌نام و ورود به پنل</button>
     </form>
   </div>
 </section>
@@ -256,6 +259,21 @@
   var registerForm = document.getElementById('registerForm');
   var tabLogin = document.getElementById('tabLogin');
   var tabRegister = document.getElementById('tabRegister');
+  var errorMsgEl = document.getElementById('errorMsg');
+
+  function showAuthMsg(msg, isInfo) {
+    if (!errorMsgEl) return;
+    if (!msg) {
+      errorMsgEl.classList.add('hidden');
+      errorMsgEl.textContent = '';
+      return;
+    }
+    errorMsgEl.textContent = msg;
+    errorMsgEl.style.background = isInfo ? 'rgba(212,168,83,0.14)' : 'rgba(255,107,94,0.1)';
+    errorMsgEl.style.borderColor = isInfo ? 'rgba(212,168,83,0.45)' : 'rgba(255,107,94,0.3)';
+    errorMsgEl.style.color = isInfo ? '#f5d487' : '#ff6b5e';
+    errorMsgEl.classList.remove('hidden');
+  }
 
   function showAuth(which) {
     var isLogin = which === 'login';
@@ -263,9 +281,10 @@
     registerForm.classList.toggle('hidden', isLogin);
     tabLogin.classList.toggle('active', isLogin);
     tabRegister.classList.toggle('active', !isLogin);
+    if (window.__dojoSyncNow) window.__dojoSyncNow();
   }
-  tabLogin.addEventListener('click', function() { showAuth('login'); });
-  tabRegister.addEventListener('click', function() { showAuth('register'); });
+  tabLogin.addEventListener('click', function() { showAuthMsg(''); showAuth('login'); });
+  tabRegister.addEventListener('click', function() { showAuthMsg(''); showAuth('register'); });
 
   /* ── Coach Link ── */
   UI.loadConfig().then(function(cfg) {
@@ -303,9 +322,64 @@
   /* Init OTP on load */
   setTimeout(initOTP, 300);
 
+  /* ── Google Sign-In directly into Member /panel (or pre-filled Register) ── */
+  window.__dojoHandleGoogleIdToken = function(idToken) {
+    if (!idToken) return;
+    showAuthMsg('در حال بررسی حساب گوگل و ورود به پنل...', true);
+    if (window.__dojoSetGoogleState) {
+      window.__dojoSetGoogleState(false, true, '', '');
+    }
+    UI.api('/api/auth/google', { method: 'POST', body: { idToken: idToken } })
+    .then(function(data) {
+      if (data && data.registered) {
+        showToast('خوش آمدید! در حال ورود به پنل...', 'ok');
+        if (window.AndroidDojoBridge && typeof window.AndroidDojoBridge.onPortalGoogleLoginComplete === 'function') {
+          window.AndroidDojoBridge.onPortalGoogleLoginComplete();
+        }
+        setTimeout(function() {
+          location.href = UI.PATH_PREFIX + (data.redirect || '/panel');
+        }, 180);
+        return;
+      }
+      var email = (data && data.email) ? String(data.email) : '';
+      var name = (data && data.name) ? String(data.name) : '';
+      showAuth('register');
+      var emailInput = document.getElementById('rEmail') || registerForm.querySelector('[name="email"]');
+      var nameInput = registerForm.querySelector('[name="full_name"]');
+      var userInput = registerForm.querySelector('[name="username"]');
+      if (emailInput && email) emailInput.value = email;
+      if (nameInput && name && !nameInput.value) nameInput.value = name;
+      showAuthMsg(
+        email
+          ? ('جیمیل ' + email + ' هنوز ثبت‌نام نشده است. لطفاً ثبت‌نام را کامل کنید تا وارد پنل شوید و دفعه بعد با دکمه «ادامه با گوگل» مستقیم وارد شوید.')
+          : 'این حساب گوگل هنوز ثبت‌نام نشده است. لطفاً ابتدا ثبت‌نام کنید.',
+        true
+      );
+      if (window.__dojoSetGoogleState) {
+        window.__dojoSetGoogleState(true, false, email, '');
+      }
+      var authSec = document.getElementById('auth');
+      if (authSec && authSec.scrollIntoView) {
+        authSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      setTimeout(function() {
+        if (nameInput && !nameInput.value) nameInput.focus();
+        else if (userInput && !userInput.value) userInput.focus();
+      }, 220);
+    }).catch(function(err) {
+      var msg = (err && err.message) ? err.message : 'خطا در ورود با گوگل';
+      showAuthMsg(msg, false);
+      showToast(msg, 'warn');
+      if (window.__dojoSetGoogleState) {
+        window.__dojoSetGoogleState(false, false, '', msg);
+      }
+    });
+  };
+
   /* ── Login ── */
   loginForm.addEventListener('submit', function(e) {
     e.preventDefault();
+    showAuthMsg('');
     var btn = document.getElementById('loginBtn');
     btn.disabled = true; btn.textContent = '...';
     var password = otpCode || document.getElementById('lPass')?.value || '';
@@ -314,7 +388,10 @@
       password: password
     }}).then(function() {
       showToast('خوش آمدید!', 'ok');
-      setTimeout(function() { location.href = UI.PATH_PREFIX + '/panel'; }, 400);
+      if (window.AndroidDojoBridge && typeof window.AndroidDojoBridge.onPortalGoogleLoginComplete === 'function') {
+        window.AndroidDojoBridge.onPortalGoogleLoginComplete();
+      }
+      setTimeout(function() { location.href = UI.PATH_PREFIX + '/panel'; }, 300);
     }).catch(function(err) {
       showToast(err.message, 'warn');
       btn.disabled = false; btn.textContent = 'ورود';
@@ -326,6 +403,7 @@
   /* ── Register ── */
   registerForm.addEventListener('submit', function(e) {
     e.preventDefault();
+    showAuthMsg('');
     var data = {};
     new FormData(this).forEach(function(v, k) { data[k] = v; });
     if (data.password !== data.password2) { showToast('تکرار رمز مطابقت ندارد', 'warn'); return; }
@@ -334,10 +412,14 @@
     UI.api('/api/register', { method: 'POST', body: data })
     .then(function() {
       showToast('ثبت‌نام شد! خوش آمدید', 'ok');
-      setTimeout(function() { location.href = UI.PATH_PREFIX + '/panel'; }, 500);
+      if (window.AndroidDojoBridge && typeof window.AndroidDojoBridge.onPortalGoogleLoginComplete === 'function') {
+        window.AndroidDojoBridge.onPortalGoogleLoginComplete();
+      }
+      setTimeout(function() { location.href = UI.PATH_PREFIX + '/panel'; }, 350);
     }).catch(function(err) {
+      showAuthMsg(err.message, false);
       showToast(err.message, 'warn');
-      btn.disabled = false; btn.textContent = 'ثبت‌نام';
+      btn.disabled = false; btn.textContent = 'ثبت‌نام و ورود به پنل';
     });
   });
 

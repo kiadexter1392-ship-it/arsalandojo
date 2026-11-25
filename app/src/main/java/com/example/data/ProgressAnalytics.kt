@@ -42,6 +42,7 @@ data class ProgressDashboardSummary(
 object ProgressAnalytics {
     private const val MILLIS_PER_DAY = 86_400_000L
     private const val WEEK_BUCKETS = 6
+    private val ISO_DATE_REGEX = Regex("""^\d{4}-\d{2}-\d{2}$""")
 
     fun compute(
         logs: List<WorkoutProgressLogDoc>,
@@ -88,9 +89,10 @@ object ProgressAnalytics {
             ?.weightKgOrNull()
 
         val refDayMillis = parseDayStartMillis(referenceDateIso) ?: currentDayStartMillis()
-        val latestLogMillis = sortedChronological
-            .mapNotNull { parseDayStartMillis(effectiveDateIso(it, referenceDateIso)) }
-            .maxOrNull() ?: refDayMillis
+        val logDayMillis = sortedChronological.map { doc ->
+            parseDayStartMillis(effectiveDateIso(doc, referenceDateIso)) ?: refDayMillis
+        }
+        val latestLogMillis = logDayMillis.maxOrNull() ?: refDayMillis
         val anchorEndMillis = maxOf(refDayMillis, latestLogMillis)
 
         // Align anchor end to 7-day rolling buckets ending on anchorEndMillis
@@ -106,17 +108,27 @@ object ProgressAnalytics {
             val rangeLabel = "${JalaliCalendar.faNum(startJalali.jd)} تا " +
                 "${JalaliCalendar.faNum(endJalali.jd)} ${JalaliCalendar.MONTHS[endJalali.jm - 1]}"
 
-            val inBucket = sortedChronological.filter { doc ->
-                val dayMs = parseDayStartMillis(effectiveDateIso(doc, referenceDateIso)) ?: refDayMillis
-                dayMs in startMillis..endMillis
+            var workoutCount = 0
+            var milestoneCount = 0
+            var bucketMinutes = 0
+            for (idx in sortedChronological.indices) {
+                val dayMs = logDayMillis[idx]
+                if (dayMs in startMillis..endMillis) {
+                    val doc = sortedChronological[idx]
+                    when (doc.resolvedCategory()) {
+                        ProgressLogCategory.WORKOUT -> workoutCount++
+                        ProgressLogCategory.MILESTONE -> milestoneCount++
+                    }
+                    bucketMinutes += doc.durationMinutes.coerceIn(0L, 600L).toInt()
+                }
             }
 
             WeeklyFrequencyBucket(
                 shortLabel = shortLabel,
                 rangeLabel = rangeLabel,
-                workoutCount = inBucket.count { it.resolvedCategory() == ProgressLogCategory.WORKOUT },
-                milestoneCount = inBucket.count { it.resolvedCategory() == ProgressLogCategory.MILESTONE },
-                totalMinutes = inBucket.sumOf { it.durationMinutes.coerceIn(0L, 600L).toInt() }
+                workoutCount = workoutCount,
+                milestoneCount = milestoneCount,
+                totalMinutes = bucketMinutes
             )
         }
 
@@ -161,7 +173,7 @@ object ProgressAnalytics {
 
     private fun effectiveDateIso(doc: WorkoutProgressLogDoc, fallbackIso: String): String {
         val raw = doc.sessionDateIso.trim()
-        if (Regex("""^\d{4}-\d{2}-\d{2}$""").matches(raw)) {
+        if (ISO_DATE_REGEX.matches(raw)) {
             return raw
         }
         val tsMillis = doc.createdAt?.toDate()?.time

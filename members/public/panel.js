@@ -15,7 +15,6 @@
   const TITLES = {
     home: 'خانه',
     plans: 'تمرینات من',
-    meal: 'برنامه غذایی هوشمند',
     progress: 'جدول پیشرفت من',
     news: 'اطلاعیه‌ها و اعلان‌ها',
     payment: 'پرداخت شهریه',
@@ -85,7 +84,6 @@
     try {
       if (view === 'home') await renderHome(box);
       else if (view === 'plans') await renderPlans(box);
-      else if (view === 'meal') await renderMeal(box);
       else if (view === 'progress') await renderProgress(box);
       else if (view === 'news') await renderNews(box);
       else if (view === 'payment') await renderPayment(box);
@@ -141,6 +139,19 @@
           </div>
         </div>
 
+        ${!ME.email ? `<div class="card" id="linkGmailCard">
+          <div class="row between wrap" style="gap:12px">
+            <div class="grow">
+              <div class="bold">اتصال جیمیل برای ورود مستقیم با گوگل</div>
+              <p class="tiny muted" style="margin:4px 0 0">جیمیل خود را ثبت کنید تا دفعات بعد با دکمه «ادامه با گوگل» بدون رمز مستقیم وارد پنل شوید.</p>
+            </div>
+            <form id="quickGmailForm" class="row wrap" style="gap:8px;flex:1;min-width:240px;max-width:440px">
+              <input id="quickGmailInput" name="email" type="email" class="en grow" dir="ltr" placeholder="example@gmail.com" required style="min-width:170px">
+              <button type="submit" class="btn sm primary">ثبت جیمیل</button>
+            </form>
+          </div>
+        </div>` : ''}
+
         <div class="grid-4 member-metrics" aria-label="خلاصهٔ وضعیت">
           ${stat('تمرین باز', fa(open.length), 'باید انجام دهی', 'var(--red)')}
           ${stat('تکمیل‌شده', fa(done.length), 'از ابتدای عضویت', 'var(--green)')}
@@ -173,6 +184,26 @@
       </div>`;
 
     wireGoto(box);
+    const quickGmailForm = box.querySelector('#quickGmailForm');
+    if (quickGmailForm) {
+      quickGmailForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const emailVal = String(box.querySelector('#quickGmailInput')?.value || '').trim();
+        if (!emailVal) return;
+        const submitBtn = quickGmailForm.querySelector('button[type="submit"]');
+        if (submitBtn) submitBtn.disabled = true;
+        try {
+          const r = await api('/api/me', { method: 'PUT', body: { email: emailVal } });
+          ME = r.user;
+          toast('جیمیل ثبت شد؛ از این به بعد می‌توانید با گوگل مستقیم وارد شوید.', 'ok');
+          box.querySelector('#linkGmailCard')?.remove();
+        } catch (err) {
+          toast(err.message, 'warn');
+        } finally {
+          if (submitBtn) submitBtn.disabled = false;
+        }
+      });
+    }
     const chart = box.querySelector('#homeChart');
     function drawChart() {
       const points = series.slice(-Number(box.querySelector('#homeChartRange').value));
@@ -345,27 +376,6 @@
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || 'درخواست انجام نشد');
     return data;
-  }
-
-  async function renderMeal(box) {
-    const data = await wellness('meals');
-    const renderPlan = (plan, id) => `<article class="card meal-plan-result"><h3>${esc(plan.title)}</h3><p>${esc(plan.summary)}</p><ul>${plan.meals.map(m=>`<li><b>${esc(m.title)}</b><p>${esc(m.foods)}</p></li>`).join('')}</ul>${id ? `<button type="button" class="btn sm ghost" data-delete-meal="${id}">حذف برنامه</button>` : ''}</article>`;
-    box.innerHTML = `<div class="stack"><div class="card"><h2>برنامه غذایی هوشمند</h2><p class="hint">پیشنهاد هوش مصنوعی جایگزین متخصص تغذیه نیست و برای درمان بیماری یا رژیم کودکان مناسب نیست. اطلاعاتی که وارد می‌کنید با رضایت شما به سرویس Google Gemini ارسال می‌شود و نتیجه در حساب سایت ذخیره می‌شود؛ با اپ اندروید همگام نیست.</p>
-      ${data.available ? `<form id="mealForm" class="stack"><label class="field">هدف<input name="goal" maxlength="300" required placeholder="مثلاً تغذیه متعادل"></label><label class="field">تعداد وعده<select name="meals"><option value="3">۳</option><option value="4">۴</option><option value="5">۵</option><option value="6">۶</option></select></label><label class="field">غذاهای دلخواه<textarea name="foods" maxlength="1000"></textarea></label><label class="field">محدودیت‌های غذایی<textarea name="restrictions" maxlength="1000"></textarea></label><label class="field">توضیحات<textarea name="notes" maxlength="1000"></textarea></label><label><input type="checkbox" name="adult" required> تأیید می‌کنم ۱۸ سال یا بیشتر دارم.</label><label><input type="checkbox" name="consent" required> با ارسال اطلاعات واردشده به Google Gemini برای ساخت پیشنهاد موافقم.</label><p class="hint">از وارد کردن نام، شماره تماس یا اطلاعات پزشکی غیرضروری خودداری کنید.</p><button class="btn primary" type="submit">ساخت برنامه غذایی</button><p id="mealError" role="alert"></p></form>` : `<p class="hint">سرویس ساخت برنامه هنوز در سرور تنظیم نشده است. برای ثبت درخواست از <a href="${esc(UI.PATH_PREFIX)}/academy#nutrition">فرم درخواست تغذیه</a> استفاده کنید.</p>`}</div>
-      <h3>برنامه‌های ذخیره‌شده</h3>${data.plans.length ? data.plans.map(p=>renderPlan(p.content,p.id)).join('') : emptyHTML('هنوز برنامه‌ای ذخیره نشده است.', '◌')}</div>`;
-    const form=box.querySelector('#mealForm');
-    if(form) form.addEventListener('submit',async event=>{
-      event.preventDefault(); if(!form.reportValidity())return;
-      const f=new FormData(form), submit=form.querySelector('button[type=submit]');
-      submit.disabled=true;
-      try { await wellness('meals',{goal:f.get('goal'),meals:Number(f.get('meals')),foods:f.get('foods'),restrictions:f.get('restrictions'),notes:f.get('notes'),adult:f.has('adult'),consent:f.has('consent')}); if(state.view==='meal') await renderMeal(box); }
-      catch(err) { if(form.isConnected) form.querySelector('#mealError').textContent=err.message; }
-      finally { submit.disabled=false; }
-    });
-    box.querySelectorAll('[data-delete-meal]').forEach(button=>button.addEventListener('click',async()=>{
-      if(!confirm('این برنامه حذف شود؟'))return;
-      try { await wellness('meals/'+Number(button.dataset.deleteMeal)+'/delete',{}); if(state.view==='meal')await renderMeal(box); } catch(err) {toast(err.message,'warn');}
-    }));
   }
 
   /* =========================== جدول پیشرفت من =========================== */
@@ -774,6 +784,7 @@
               <div class="field"><label for="pBloodGroup">گروه خونی</label><select id="pBloodGroup" name="blood_group" dir="ltr"><option value="">نامشخص</option>${UI.BLOOD_GROUPS.map(group => `<option ${ME.blood_group === group ? 'selected' : ''}>${group}</option>`).join('')}</select></div>
             </div>
             <div class="grid-2">
+              <div class="field"><label for="pEmail">جیمیل (ورود سریع با گوگل)</label><input id="pEmail" name="email" type="email" class="en" dir="ltr" placeholder="example@gmail.com" value="${esc(ME.email || '')}"></div>
               <div class="field"><label>سابقه تمرین</label><input name="experience" value="${esc(ME.experience || '')}"></div>
             </div>
             <div><button class="btn primary" type="submit">ذخیره تغییرات</button></div>

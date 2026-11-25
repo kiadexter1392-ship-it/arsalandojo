@@ -28,26 +28,18 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -62,7 +54,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ShowChart
-import androidx.compose.material.icons.filled.RestaurantMenu
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -86,6 +77,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -116,13 +108,16 @@ import com.example.ui.theme.DojoPurpleGlowSoft
 import com.example.ui.theme.DojoPurpleImperial
 import com.example.ui.theme.DojoPurpleOrchid
 import com.example.ui.theme.DojoPurpleRoyal
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 import kotlin.math.min
 
@@ -152,8 +147,24 @@ private fun resolveDojoCardDrawableRes(path: String): Int? {
     }
 }
 
+private val dojoCardAssetCache = ConcurrentHashMap<Int, ByteArray>()
+
+private fun getCachedCardAssetBytes(context: Context, resId: Int): ByteArray? {
+    dojoCardAssetCache[resId]?.let { return it }
+    val loaded = runCatching {
+        context.resources.openRawResource(resId).use { it.readBytes() }
+    }.getOrNull() ?: return null
+    dojoCardAssetCache.putIfAbsent(resId, loaded)
+    return loaded
+}
+
 private val GLASS_THEME_AND_VIEWPORT_JS = """
 (function(){
+  if(window.__dojoViewportInitialized && window.__dojoSyncNow){
+    window.__dojoSyncNow();
+    return;
+  }
+  window.__dojoViewportInitialized=true;
   if(!document.getElementById('dojo-viewport-fix')){
     var s=document.createElement('style');
     s.id='dojo-viewport-fix';
@@ -161,8 +172,8 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
       'html,body{overflow-x:clip!important;max-width:100%!important;}' +
       'html:not(.dojo-login-active),html:not(.dojo-login-active) body{background:transparent!important;background-color:transparent!important;background-image:none!important;}' +
       'html:not(.dojo-login-active) main,html:not(.dojo-login-active) section:not([data-dojo-login-box="1"]),html:not(.dojo-login-active) .section:not([data-dojo-login-box="1"]),html:not(.dojo-login-active) .page,html:not(.dojo-login-active) .view,html:not(.dojo-login-active) .tab-pane,html:not(.dojo-login-active) .dashboard,html:not(.dojo-login-active) #app,html:not(.dojo-login-active) #root,html:not(.dojo-login-active) #main,html:not(.dojo-login-active) .panel-shell,html:not(.dojo-login-active) .panel-wrap,html:not(.dojo-login-active) .panel-page{overflow-x:clip!important;background:transparent!important;background-color:transparent!important;background-image:none!important;}' +
-      'html:not(.dojo-login-active) header,html:not(.dojo-login-active) nav,html:not(.dojo-login-active) .navbar,html:not(.dojo-login-active) .topbar{background:rgba(248,242,255,0.62)!important;backdrop-filter:blur(18px) saturate(155%)!important;-webkit-backdrop-filter:blur(18px) saturate(155%)!important;border-bottom:1px solid rgba(109,40,217,0.22)!important;box-shadow:0 8px 26px rgba(76,29,149,0.10)!important;}' +
-      'html:not(.dojo-login-active) .panel:not([data-dojo-login-box="1"]),html:not(.dojo-login-active) .glass:not([data-dojo-login-box="1"]),html:not(.dojo-login-active) .info-card:not([data-dojo-login-box="1"]),html:not(.dojo-login-active) .plan-card:not([data-dojo-login-box="1"]),html:not(.dojo-login-active) .contact-card:not([data-dojo-login-box="1"]){background:rgba(255,255,255,0.44)!important;backdrop-filter:blur(16px) saturate(150%)!important;-webkit-backdrop-filter:blur(16px) saturate(150%)!important;border:1px solid rgba(255,255,255,0.68)!important;box-shadow:0 12px 30px rgba(76,29,149,0.12)!important;}' +
+      'html:not(.dojo-login-active) header,html:not(.dojo-login-active) nav,html:not(.dojo-login-active) .navbar,html:not(.dojo-login-active) .topbar{background:rgba(248,242,255,0.84)!important;border-bottom:1px solid rgba(109,40,217,0.22)!important;box-shadow:0 6px 20px rgba(76,29,149,0.09)!important;}' +
+      'html:not(.dojo-login-active) .panel:not([data-dojo-login-box="1"]),html:not(.dojo-login-active) .glass:not([data-dojo-login-box="1"]),html:not(.dojo-login-active) .info-card:not([data-dojo-login-box="1"]),html:not(.dojo-login-active) .plan-card:not([data-dojo-login-box="1"]),html:not(.dojo-login-active) .contact-card:not([data-dojo-login-box="1"]){background:rgba(255,255,255,0.68)!important;border:1px solid rgba(255,255,255,0.74)!important;box-shadow:0 8px 22px rgba(76,29,149,0.10)!important;contain:layout style;}' +
       '[data-dojo-login-box="1"]{background:#F0EDE6!important;background-color:#F0EDE6!important;background-image:none!important;}' +
       'html.dojo-login-active,html.dojo-login-active body{background:#F0EDE6!important;background-color:#F0EDE6!important;}' +
       '@media (max-width:768px){.bank-card-wrap{width:min(310px,100%)!important;height:204px!important;}}' +
@@ -295,25 +306,30 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
     for(var ii=0;ii<imgs.length;ii++){
       var im=imgs[ii];
       if(!im) continue;
+      if(im.getAttribute('data-dojo-card-ready')==='1' && im.complete && im.naturalWidth>0){
+        continue;
+      }
       var s=im.getAttribute('src')||'';
-      var expectedSport=resolveDojoSportAssetPath(im);
+      if(s.indexOf('/__dojo_assets/')!==-1){
+        if(im.complete && im.naturalWidth>0){
+          im.setAttribute('data-dojo-card-ready','1');
+        }
+        continue;
+      }
       var isCardSwapPhoto=(im.classList && im.classList.contains('csw-photo')) || (im.closest && !!im.closest('.csw-card'));
+      var expectedSport=isCardSwapPhoto || !s || (im.complete && im.naturalWidth===0) ? resolveDojoSportAssetPath(im) : '';
       if(isCardSwapPhoto && expectedSport && s.indexOf(expectedSport)===-1 && im.getAttribute('data-dojo-svg-tried')!=='1'){
         im.setAttribute('data-dojo-fallback','1');
         im.setAttribute('data-dojo-card-photo','1');
+        im.setAttribute('data-dojo-card-ready','1');
         im.src=expectedSport;
-        continue;
-      }
-      if(s.indexOf('/__dojo_assets/')!==-1){
-        if(expectedSport && s.indexOf(expectedSport)===-1){
-          im.src=expectedSport;
-        }
         continue;
       }
       if(s.indexOf('data:image/svg+xml')===0){
         if(expectedSport && im.getAttribute('data-dojo-svg-tried')!=='1'){
           im.setAttribute('data-dojo-fallback','1');
           im.setAttribute('data-dojo-card-photo','1');
+          im.setAttribute('data-dojo-card-ready','1');
           im.src=expectedSport;
         }
         continue;
@@ -332,18 +348,25 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
     window.__dojoImgErrorBound=true;
     document.addEventListener('error', function(ev){
       if(ev && ev.target && ev.target.nodeName==='IMG'){
+        ev.target.removeAttribute('data-dojo-card-ready');
         handleBrokenImage(ev.target);
       }
     }, true);
   }
   function isVisible(el){
-    if(!el)return false;
+    if(!el || el.hidden)return false;
+    if(el.style && el.style.display==='none')return false;
+    if(el.getClientRects && el.getClientRects().length===0)return false;
     var st=window.getComputedStyle(el);
-    if(!st || st.display==='none' || st.visibility==='hidden' || parseFloat(st.opacity)===0)return false;
+    if(!st || st.display==='none' || st.visibility==='hidden' || st.opacity==='0')return false;
     var r=el.getBoundingClientRect();
     return r.width>0 && r.height>0;
   }
+  var __dojoIsSyncing=false;
   function syncLoginAndPanelState(){
+    if(__dojoIsSyncing) return;
+    __dojoIsSyncing=true;
+    try{
     var href=(location.pathname+location.search+location.hash).toLowerCase();
     var isLoginUrl=/\/(login|signin|auth|register)(\/|$|\?|#)|#(login|signin|auth)/.test(href);
     var oldBoxes=document.querySelectorAll('[data-dojo-login-box="1"]');
@@ -373,15 +396,17 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
     }
 
     for(var j=0;j<loginBoxes.length;j++){
-      loginBoxes[j].setAttribute('data-dojo-login-box','1');
+      if(loginBoxes[j].getAttribute('data-dojo-login-box')!=='1'){
+        loginBoxes[j].setAttribute('data-dojo-login-box','1');
+      }
     }
 
     var hasOtherVisibleSections=false;
     var nonLoginBlocks=document.querySelectorAll('section, .section, .bank-card-wrap, .panel, .dashboard, table, .tab-pane, .plan-card');
     for(var b=0;b<nonLoginBlocks.length;b++){
       var blk=nonLoginBlocks[b];
-      if(!isVisible(blk)) continue;
       if(blk.getAttribute('data-dojo-login-box')==='1' || blk.closest('[data-dojo-login-box="1"]') || blk.querySelector('[data-dojo-login-box="1"]')) continue;
+      if(!isVisible(blk)) continue;
       var br=blk.getBoundingClientRect();
       if(br.height>=70 && br.width>=120){
         hasOtherVisibleSections=true;
@@ -394,38 +419,38 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
       hasFullLogin=true;
     }
 
-    document.documentElement.classList.toggle('dojo-login-active', !!hasFullLogin);
-    if(window.AndroidDojoBridge && typeof window.AndroidDojoBridge.setLoginScreenActive==='function'){
-      window.AndroidDojoBridge.setLoginScreenActive(!!hasFullLogin);
+    var nextLoginActive=!!hasFullLogin;
+    if(document.documentElement.classList.contains('dojo-login-active')!==nextLoginActive){
+      document.documentElement.classList.toggle('dojo-login-active', nextLoginActive);
+    }
+    if(window.__dojoLastLoginActive!==nextLoginActive){
+      window.__dojoLastLoginActive=nextLoginActive;
+      if(window.AndroidDojoBridge && typeof window.AndroidDojoBridge.setLoginScreenActive==='function'){
+        window.AndroidDojoBridge.setLoginScreenActive(nextLoginActive);
+      }
     }
 
     var isPanelUrl=/\/(panel|dashboard|coach|member|student|admin|profile)(\/|$|\?|#)|#(panel|dashboard|coach|member|student)/.test(href);
     var hasLogoutControl=false;
-    var logoutCandidates=document.querySelectorAll('[id*="logout" i], [class*="logout" i], a[href*="logout" i], button, a');
-    for(var lc=0;lc<logoutCandidates.length;lc++){
-      var lEl=logoutCandidates[lc];
-      if(!isVisible(lEl)) continue;
-      if(lEl.matches('[id*="logout" i], [class*="logout" i], a[href*="logout" i]')){
-        hasLogoutControl=true;
-        break;
-      }
-      var lTxt=(lEl.textContent||'').replace(/\s+/g,' ').trim();
-      if(lTxt.length>0 && lTxt.length<=28 && (lTxt.indexOf('خروج')!==-1 || /logout|sign\s*out/i.test(lTxt))){
-        hasLogoutControl=true;
-        break;
-      }
-    }
-
     var hasVisibleLoginTrigger=false;
-    var loginTriggers=document.querySelectorAll('button, a');
-    for(var lt=0;lt<loginTriggers.length;lt++){
-      var tEl=loginTriggers[lt];
-      if(!isVisible(tEl)) continue;
-      var tTxt=(tEl.textContent||'').replace(/\s+/g,' ').trim();
-      if(tTxt==='ورود' || tTxt==='ورود به پنل' || tTxt==='ورود / ثبت‌نام' || tTxt==='ثبت نام' || tTxt==='ثبت‌نام'){
-        hasVisibleLoginTrigger=true;
-        break;
+    var actionEls=document.querySelectorAll('[id*="logout" i], [class*="logout" i], a[href*="logout" i], button, a');
+    for(var ac=0;ac<actionEls.length;ac++){
+      var aEl=actionEls[ac];
+      if(aEl.closest && aEl.closest('#dojo-google-auth-wrap')) continue;
+      if(!isVisible(aEl)) continue;
+      if(!hasLogoutControl && aEl.matches('[id*="logout" i], [class*="logout" i], a[href*="logout" i]')){
+        hasLogoutControl=true;
       }
+      var txt=(aEl.textContent||'').replace(/\s+/g,' ').trim();
+      if(txt.length>0 && txt.length<=28){
+        if(!hasLogoutControl && (txt.indexOf('خروج')!==-1 || /logout|sign\s*out/i.test(txt))){
+          hasLogoutControl=true;
+        }
+        if(!hasVisibleLoginTrigger && (txt==='ورود' || txt==='ورود به پنل' || txt==='ورود / ثبت‌نام' || txt==='ثبت نام' || txt==='ثبت‌نام')){
+          hasVisibleLoginTrigger=true;
+        }
+      }
+      if(hasLogoutControl && hasVisibleLoginTrigger) break;
     }
 
     var isAuthenticated=false;
@@ -445,8 +470,11 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
       }
     }
 
-    if(window.AndroidDojoBridge && typeof window.AndroidDojoBridge.setAuthenticatedState==='function'){
-      window.AndroidDojoBridge.setAuthenticatedState(!!isAuthenticated);
+    if(window.__dojoLastAuthed!==isAuthenticated){
+      window.__dojoLastAuthed=isAuthenticated;
+      if(window.AndroidDojoBridge && typeof window.AndroidDojoBridge.setAuthenticatedState==='function'){
+        window.AndroidDojoBridge.setAuthenticatedState(!!isAuthenticated);
+      }
     }
 
     if(hasFullLogin && document.body){
@@ -462,7 +490,7 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
       var wrappers=document.querySelectorAll('body > div, body > main, main > div, #app > div, #root > div, .page, .panel-shell, .panel-wrap, .dashboard, .tab-content');
       for(var w=0;w<wrappers.length;w++){
         var wr=wrappers[w];
-        if(!wr || wr.getAttribute('data-dojo-login-box')==='1' || wr.closest('[data-dojo-login-box="1"]')) continue;
+        if(!wr || wr.getAttribute('data-dojo-panel-bg')==='1' || wr.getAttribute('data-dojo-login-box')==='1' || wr.closest('[data-dojo-login-box="1"]')) continue;
         if(wr.matches('header, nav, .navbar, .topbar, .bank-card-wrap, .bank-card, .bank-face')) continue;
         var rect=wr.getBoundingClientRect();
         if(rect.width>=vw*0.80 && rect.height>=vh*0.30){
@@ -477,6 +505,9 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
     }
     syncGoogleAuthWidget();
     syncBrokenImages();
+    } finally {
+      __dojoIsSyncing=false;
+    }
   }
   window.__dojoGoogleState = window.__dojoGoogleState || { signedIn: false, signingIn: false, email: '', error: '' };
   function syncGoogleAuthWidget(){
@@ -534,23 +565,21 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
     var okEl = document.getElementById('dojo-google-auth-status');
     var errEl = document.getElementById('dojo-google-auth-error');
     if(btnEl && lblEl && okEl && errEl){
-      if(st.signedIn){
-        btnEl.style.display = 'none';
+      btnEl.style.display = 'flex';
+      btnEl.disabled = !!st.signingIn;
+      btnEl.style.opacity = st.signingIn ? '0.65' : '1';
+      lblEl.textContent = st.signingIn ? 'در حال اتصال به گوگل...' : 'ادامه با گوگل';
+      if(st.signedIn && st.email && !st.signingIn){
         okEl.style.display = 'block';
-        okEl.textContent = st.email ? ('متصل به حساب گوگل: ' + st.email) : 'متصل به حساب گوگل';
-        errEl.style.display = 'none';
+        okEl.textContent = 'حساب گوگل: ' + st.email;
       }else{
-        btnEl.style.display = 'flex';
-        btnEl.disabled = !!st.signingIn;
-        btnEl.style.opacity = st.signingIn ? '0.65' : '1';
-        lblEl.textContent = st.signingIn ? 'در حال اتصال به گوگل...' : 'ادامه با گوگل';
         okEl.style.display = 'none';
-        if(st.error){
-          errEl.style.display = 'block';
-          errEl.textContent = st.error;
-        }else{
-          errEl.style.display = 'none';
-        }
+      }
+      if(st.error){
+        errEl.style.display = 'block';
+        errEl.textContent = st.error;
+      }else{
+        errEl.style.display = 'none';
       }
     }
   }
@@ -563,17 +592,17 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
     };
     syncGoogleAuthWidget();
   };
+  window.__dojoSyncNow = syncLoginAndPanelState;
   syncLoginAndPanelState();
   if(!window.__dojoLoginObserver){
     window.__dojoLoginObserver=true;
-    var scheduled=false;
+    var syncTimer=0;
     var triggerSync=function(){
-      if(scheduled)return;
-      scheduled=true;
-      requestAnimationFrame(function(){
-        scheduled=false;
-        syncLoginAndPanelState();
-      });
+      if(__dojoIsSyncing || syncTimer) return;
+      syncTimer=setTimeout(function(){
+        syncTimer=0;
+        requestAnimationFrame(syncLoginAndPanelState);
+      }, 140);
     };
     window.addEventListener('hashchange', triggerSync);
     window.addEventListener('popstate', triggerSync);
@@ -594,8 +623,21 @@ private val GLASS_THEME_AND_VIEWPORT_JS = """
       };
     }
     if(typeof MutationObserver==='function' && document.body){
-      var obs=new MutationObserver(triggerSync);
-      obs.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style','hidden','src','alt']});
+      var obs=new MutationObserver(function(records){
+        if(__dojoIsSyncing) return;
+        for(var m=0;m<records.length;m++){
+          var rec=records[m];
+          var tgt=rec.target;
+          if(tgt && tgt.nodeType===1){
+            if(tgt.id==='dojo-google-auth-wrap' || (tgt.closest && (tgt.closest('#dojo-google-auth-wrap') || tgt.closest('.otp-row')))){
+              continue;
+            }
+          }
+          triggerSync();
+          break;
+        }
+      });
+      obs.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','hidden','src']});
     }
   }
   if(window.scrollX!==0){window.scrollTo(0,window.scrollY);}
@@ -691,6 +733,13 @@ private class AndroidDojoBridge(
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 onGoogleSignInRequested()
             }
+        }
+    }
+
+    @JavascriptInterface
+    fun onPortalGoogleLoginComplete() {
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching { CookieManager.getInstance().flush() }
         }
     }
 
@@ -1125,7 +1174,10 @@ private val SMOOTH_ONE_TIME_CODE_JS = """
 })();
 """.trimIndent()
 
-@OptIn(ExperimentalLayoutApi::class)
+private val SMOOTH_ONE_TIME_CODE_JS_BYTES: ByteArray by lazy {
+    SMOOTH_ONE_TIME_CODE_JS.toByteArray(Charsets.UTF_8)
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun DojoPortalScreen(
@@ -1134,13 +1186,16 @@ fun DojoPortalScreen(
     googleUserEmail: String = "",
     isGoogleSigningIn: Boolean = false,
     googleAuthError: String? = null,
+    portalGoogleIdToken: String? = null,
+    portalGoogleTokenTick: Int = 0,
+    onPortalGoogleTokenConsumed: () -> Unit = {},
     onGoogleSignInClick: () -> Unit = {},
-    onOpenMealPlan: () -> Unit = {},
     onOpenProgressDashboard: () -> Unit = {},
     onToast: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val latestOnGoogleSignInClick by rememberUpdatedState(onGoogleSignInClick)
+    val latestOnPortalGoogleTokenConsumed by rememberUpdatedState(onPortalGoogleTokenConsumed)
 
     var loadProgress by remember { mutableIntStateOf(0) }
     var canGoBack by remember { mutableStateOf(false) }
@@ -1174,6 +1229,70 @@ fun DojoPortalScreen(
         )
     }
 
+    LaunchedEffect(portalGoogleIdToken, portalGoogleTokenTick, pageFinishTick) {
+        val token = portalGoogleIdToken ?: return@LaunchedEffect
+        if (token.isBlank() || pageFinishTick <= 0) return@LaunchedEffect
+        val wv = webViewRef ?: return@LaunchedEffect
+        val tokenLiteral = org.json.JSONObject.quote(token)
+        wv.evaluateJavascript(
+            """
+            (function(t){
+              if(typeof window.__dojoHandleGoogleIdToken==='function'){
+                window.__dojoHandleGoogleIdToken(t);
+                return 'handled';
+              }
+              var host=document.querySelector('#auth .auth-box, #auth, .auth-box');
+              if(!host) return 'waiting';
+              var prefix=(window.UI && window.UI.PATH_PREFIX) ? window.UI.PATH_PREFIX : '';
+              if(window.__dojoSetGoogleState){window.__dojoSetGoogleState(false,true,'','');}
+              fetch(prefix + '/api/auth/google', {
+                method:'POST',
+                credentials:'same-origin',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({idToken:t})
+              }).then(function(r){
+                return r.json().catch(function(){return {};}).then(function(d){
+                  if(!r.ok || !d || d.ok===false) throw new Error((d&&d.error)||'خطا در ورود با گوگل');
+                  return d;
+                });
+              }).then(function(d){
+                if(d.registered){
+                  if(window.AndroidDojoBridge && window.AndroidDojoBridge.onPortalGoogleLoginComplete){
+                    window.AndroidDojoBridge.onPortalGoogleLoginComplete();
+                  }
+                  location.href = prefix + (d.redirect || '/panel');
+                }else{
+                  var tabReg=document.getElementById('tabRegister');
+                  if(tabReg) tabReg.click();
+                  var regForm=document.getElementById('registerForm');
+                  if(regForm){
+                    if(!regForm.querySelector('[name="email"]')){
+                      var row=document.createElement('div');
+                      row.className='form-row';
+                      row.innerHTML='<div class="form-group" style="grid-column:1/-1"><label for="rEmail">جیمیل (برای ورود مستقیم با گوگل)</label><input id="rEmail" name="email" type="email" class="en" dir="ltr" placeholder="example@gmail.com"></div>';
+                      var btn=regForm.querySelector('button[type="submit"]');
+                      if(btn && btn.parentNode) btn.parentNode.insertBefore(row, btn); else regForm.appendChild(row);
+                    }
+                    var emailInp=regForm.querySelector('[name="email"]');
+                    if(emailInp && d.email) emailInp.value=d.email;
+                    var nameInp=regForm.querySelector('[name="full_name"]');
+                    if(nameInp && d.name && !nameInp.value) nameInp.value=d.name;
+                  }
+                  if(window.__dojoSetGoogleState){window.__dojoSetGoogleState(true,false,d.email||'','');}
+                }
+              }).catch(function(err){
+                if(window.__dojoSetGoogleState){window.__dojoSetGoogleState(false,false,'',(err&&err.message)||'خطا در ورود با گوگل');}
+              });
+              return 'fallback';
+            })($tokenLiteral)
+            """.trimIndent()
+        ) { result ->
+            if (result == "\"handled\"" || result == "\"fallback\"") {
+                latestOnPortalGoogleTokenConsumed()
+            }
+        }
+    }
+
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -1196,15 +1315,16 @@ fun DojoPortalScreen(
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
+        val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> webViewRef?.onResume()
                 Lifecycle.Event.ON_PAUSE -> {
                     webViewRef?.onPause()
-                    runCatching { CookieManager.getInstance().flush() }
+                    ioScope.launch { runCatching { CookieManager.getInstance().flush() } }
                 }
                 Lifecycle.Event.ON_STOP -> {
-                    runCatching { CookieManager.getInstance().flush() }
+                    ioScope.launch { runCatching { CookieManager.getInstance().flush() } }
                 }
                 else -> Unit
             }
@@ -1212,7 +1332,7 @@ fun DojoPortalScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            runCatching { CookieManager.getInstance().flush() }
+            ioScope.launch { runCatching { CookieManager.getInstance().flush() } }
             webViewRef?.let { wv ->
                 runCatching { wv.stopLoading() }
                 runCatching { (wv.parent as? ViewGroup)?.removeView(wv) }
@@ -1328,14 +1448,15 @@ fun DojoPortalScreen(
                                         return WebResourceResponse(
                                             "application/javascript",
                                             "UTF-8",
-                                            ByteArrayInputStream(SMOOTH_ONE_TIME_CODE_JS.toByteArray(Charsets.UTF_8))
+                                            200,
+                                            "OK",
+                                            mapOf("Cache-Control" to "public, max-age=604800, immutable"),
+                                            ByteArrayInputStream(SMOOTH_ONE_TIME_CODE_JS_BYTES)
                                         )
                                     }
                                     val cardDrawableRes = resolveDojoCardDrawableRes(path)
                                     if (cardDrawableRes != null) {
-                                        val bytes = runCatching {
-                                            ctx.resources.openRawResource(cardDrawableRes).use { it.readBytes() }
-                                        }.getOrNull()
+                                        val bytes = getCachedCardAssetBytes(ctx, cardDrawableRes)
                                         if (bytes != null) {
                                             return WebResourceResponse(
                                                 "image/jpeg",
@@ -1344,7 +1465,7 @@ fun DojoPortalScreen(
                                                 "OK",
                                                 mapOf(
                                                     "Access-Control-Allow-Origin" to "*",
-                                                    "Cache-Control" to "public, max-age=86400"
+                                                    "Cache-Control" to "public, max-age=604800, immutable"
                                                 ),
                                                 ByteArrayInputStream(bytes)
                                             )
@@ -1586,64 +1707,31 @@ fun DojoPortalScreen(
                 .padding(start = 16.dp, end = 16.dp, bottom = 14.dp)
         ) {
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                Surface(
+                    onClick = onOpenProgressDashboard,
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("open_progress_dashboard_btn"),
+                    shape = RoundedCornerShape(24.dp),
+                    color = DojoPurpleRoyal,
+                    contentColor = Color.White,
+                    shadowElevation = 8.dp,
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.35f))
                 ) {
-                    Surface(
-                        onClick = onOpenMealPlan,
-                        modifier = Modifier
-                            .height(48.dp)
-                            .testTag("open_meal_plan_btn"),
-                        shape = RoundedCornerShape(24.dp),
-                        color = DojoPurpleRoyal,
-                        contentColor = Color.White,
-                        shadowElevation = 8.dp,
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.35f))
+                    Row(
+                        modifier = Modifier.padding(horizontal = 18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.RestaurantMenu,
-                                contentDescription = stringResource(R.string.meal_plan_fab_label),
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = stringResource(R.string.meal_plan_fab_label),
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                        }
-                    }
-
-                    Surface(
-                        onClick = onOpenProgressDashboard,
-                        modifier = Modifier
-                            .height(48.dp)
-                            .testTag("open_progress_dashboard_btn"),
-                        shape = RoundedCornerShape(24.dp),
-                        color = DojoGlassCardFrost,
-                        contentColor = DojoPurpleImperial,
-                        shadowElevation = 8.dp,
-                        border = BorderStroke(1.dp, DojoPurpleBorderGlow)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ShowChart,
-                                contentDescription = stringResource(R.string.progress_fab_label),
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = stringResource(R.string.progress_fab_label),
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ShowChart,
+                            contentDescription = stringResource(R.string.progress_fab_label),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = stringResource(R.string.progress_fab_label),
+                            style = MaterialTheme.typography.labelLarge
+                        )
                     }
                 }
             }
@@ -1654,43 +1742,16 @@ fun DojoPortalScreen(
 
 @Composable
 internal fun LuxuryPurpleAmbientBackdrop(modifier: Modifier = Modifier) {
-    val transition = rememberInfiniteTransition(label = "royal_purple_glow")
-    val driftPrimary by transition.animateFloat(
-        initialValue = -0.04f,
-        targetValue = 0.04f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 9000, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "drift_primary"
-    )
-    val driftSecondary by transition.animateFloat(
-        initialValue = 0.04f,
-        targetValue = -0.04f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 12000, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "drift_secondary"
-    )
+    Spacer(
+        modifier = modifier.drawWithCache {
+            val maxDim = max(size.width, size.height)
+            val minDim = min(size.width, size.height)
 
-    Canvas(modifier = modifier) {
-        drawRect(
-            brush = Brush.verticalGradient(
+            val baseVertical = Brush.verticalGradient(
                 colors = listOf(DojoGlassCanvasTop, DojoGlassCanvasMid, DojoGlassCanvasBot)
             )
-        )
-
-        val maxDim = max(size.width, size.height)
-        val minDim = min(size.width, size.height)
-
-        // Upper-left rich imperial royal-purple luminous glow
-        val topLeftLight = Offset(
-            x = size.width * (0.14f + driftPrimary * 0.8f),
-            y = size.height * (0.18f - driftSecondary * 0.6f)
-        )
-        drawCircle(
-            brush = Brush.radialGradient(
+            val topLeftLight = Offset(size.width * 0.14f, size.height * 0.18f)
+            val topLeftBrush = Brush.radialGradient(
                 colors = listOf(
                     DojoPurpleImperial.copy(alpha = 0.54f),
                     DojoPurpleRoyal.copy(alpha = 0.36f),
@@ -1699,18 +1760,9 @@ internal fun LuxuryPurpleAmbientBackdrop(modifier: Modifier = Modifier) {
                 ),
                 center = topLeftLight,
                 radius = maxDim * 0.56f
-            ),
-            radius = maxDim * 0.56f,
-            center = topLeftLight
-        )
-
-        // Lower-right radiant royal-amethyst ambient light
-        val bottomRightLight = Offset(
-            x = size.width * (0.86f + driftSecondary * 0.8f),
-            y = size.height * (0.76f + driftPrimary * 0.6f)
-        )
-        drawCircle(
-            brush = Brush.radialGradient(
+            )
+            val bottomRightLight = Offset(size.width * 0.86f, size.height * 0.76f)
+            val bottomRightBrush = Brush.radialGradient(
                 colors = listOf(
                     DojoPurpleRoyal.copy(alpha = 0.52f),
                     DojoPurpleOrchid.copy(alpha = 0.32f),
@@ -1719,18 +1771,9 @@ internal fun LuxuryPurpleAmbientBackdrop(modifier: Modifier = Modifier) {
                 ),
                 center = bottomRightLight,
                 radius = maxDim * 0.58f
-            ),
-            radius = maxDim * 0.58f,
-            center = bottomRightLight
-        )
-
-        // Center orchid-violet ambient light bloom behind glass panels
-        val midCenter = Offset(
-            x = size.width * (0.48f - driftPrimary * 0.5f),
-            y = size.height * (0.48f + driftSecondary * 0.5f)
-        )
-        drawCircle(
-            brush = Brush.radialGradient(
+            )
+            val midCenter = Offset(size.width * 0.48f, size.height * 0.48f)
+            val midBrush = Brush.radialGradient(
                 colors = listOf(
                     DojoPurpleOrchid.copy(alpha = 0.28f),
                     DojoPurpleGlowSoft.copy(alpha = 0.16f),
@@ -1738,22 +1781,24 @@ internal fun LuxuryPurpleAmbientBackdrop(modifier: Modifier = Modifier) {
                 ),
                 center = midCenter,
                 radius = minDim * 0.92f
-            ),
-            radius = minDim * 0.92f,
-            center = midCenter
-        )
-
-        // Subtle glass specular highlight without washing out the purple glow
-        drawRect(
-            brush = Brush.linearGradient(
+            )
+            val specularHighlight = Brush.linearGradient(
                 colors = listOf(
                     Color.White.copy(alpha = 0.12f),
                     Color.Transparent,
                     Color.White.copy(alpha = 0.08f)
                 )
             )
-        )
-    }
+
+            onDrawBehind {
+                drawRect(brush = baseVertical)
+                drawCircle(brush = topLeftBrush, radius = maxDim * 0.56f, center = topLeftLight)
+                drawCircle(brush = bottomRightBrush, radius = maxDim * 0.58f, center = bottomRightLight)
+                drawCircle(brush = midBrush, radius = minDim * 0.92f, center = midCenter)
+                drawRect(brush = specularHighlight)
+            }
+        }
+    )
 }
 
 private suspend fun downloadAndShareFile(

@@ -68,7 +68,7 @@ fun toUserFriendlyFirestoreMessage(context: Context, error: Throwable): String {
         FirebaseFirestoreException.Code.UNAUTHENTICATED ->
             "دسترسی ابری تایید نشد. لطفاً دوباره با حساب گوگل وارد شوید."
         FirebaseFirestoreException.Code.RESOURCE_EXHAUSTED ->
-            context.getString(R.string.error_gemini_quota)
+            context.getString(R.string.error_cloud_quota)
         else -> "خطا در ارتباط با سرور ذخیره‌سازی. لطفاً دوباره تلاش کنید."
     }
 }

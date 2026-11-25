@@ -257,6 +257,10 @@ try {
   if (!all("PRAGMA table_info('users')").some(c => c.name === 'blood_group')) {
     db.exec('ALTER TABLE users ADD COLUMN blood_group TEXT DEFAULT NULL');
   }
+  if (!all("PRAGMA table_info('users')").some(c => c.name === 'email')) {
+    db.exec('ALTER TABLE users ADD COLUMN email TEXT DEFAULT NULL');
+  }
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(lower(email)) WHERE email IS NOT NULL AND email != ''");
   db.exec('COMMIT');
 } catch (err) {
   db.exec('ROLLBACK');
@@ -310,8 +314,25 @@ function verifyPassword(password, hash, salt) {
 
 const now = () => new Date().toISOString();
 
+function normalizeEmail(email) {
+  if (email === undefined) return undefined;
+  if (email === null) return null;
+  const cleaned = String(email).trim().toLowerCase();
+  if (!cleaned) return null;
+  if (cleaned.length > 120 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned)) {
+    throw Object.assign(new Error('آدرس جیمیل / ایمیل معتبر نیست'), { status: 400 });
+  }
+  return cleaned;
+}
+
 function findByUsername(username) {
   return get('SELECT * FROM users WHERE username = ?', String(username || '').trim().toLowerCase());
+}
+
+function findByEmail(email) {
+  const cleaned = String(email || '').trim().toLowerCase();
+  if (!cleaned) return null;
+  return get('SELECT * FROM users WHERE lower(email) = ?', cleaned);
 }
 
 function findById(id) {
@@ -328,6 +349,7 @@ function publicUser(u) {
     verified: !!u.verified,
     full_name: u.full_name,
     username: u.username,
+    email: u.email || null,
     phone: u.phone,
     gender: u.gender,
     birth_date: u.birth_date,
@@ -349,17 +371,22 @@ function publicUser(u) {
 
 function createUser(data, role = 'member') {
   data = { ...data, ...normalizeMemberDetails(data) };
+  const email = data.email !== undefined ? normalizeEmail(data.email) : null;
+  if (email && findByEmail(email)) {
+    throw Object.assign(new Error('این جیمیل قبلاً ثبت شده است'), { status: 409 });
+  }
   const { hash, salt } = hashPassword(data.password);
   const ts = now();
   const colors = ['#e2483d', '#d9a441', '#3fa7d6', '#5cb85c', '#a06cd5', '#ef7f57', '#2fa8a0'];
   const color = data.avatar_color || colors[(data.full_name || 'a').length % colors.length];
   const info = run(
-    `INSERT INTO users (role, full_name, username, phone, password_hash, password_salt, gender, birth_date, age,
+    `INSERT INTO users (role, full_name, username, email, phone, password_hash, password_salt, gender, birth_date, age,
       weight_kg, height_cm, belt, style, experience, join_date, notes, avatar_color, active, created_at, updated_at, discipline, blood_group)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     role,
     String(data.full_name || '').trim(),
     String(data.username || '').trim().toLowerCase(),
+    email,
     data.phone || null,
     hash,
     salt,
@@ -387,15 +414,26 @@ function updateUser(id, data) {
   data = { ...data, ...normalizeMemberDetails(data) };
   const fields = [];
   const values = [];
-  const allowed = ['full_name', 'phone', 'gender', 'birth_date', 'blood_group', 'age', 'weight_kg', 'height_cm',
+  const allowed = ['full_name', 'email', 'phone', 'gender', 'birth_date', 'blood_group', 'age', 'weight_kg', 'height_cm',
     'belt', 'style', 'experience', 'notes', 'active', 'avatar_color', 'join_date', 'discipline'];
   for (const key of allowed) {
     if (data[key] !== undefined) {
-      fields.push(`${key} = ?`);
       let v = data[key];
-      if (['age', 'weight_kg', 'height_cm'].includes(key)) v = v === null || v === '' ? null : Number(v);
-      if (key === 'active') v = v ? 1 : 0;
-      values.push(v === '' ? null : v);
+      if (key === 'email') {
+        v = normalizeEmail(v);
+        if (v) {
+          const existing = findByEmail(v);
+          if (existing && existing.id !== Number(id)) {
+            throw Object.assign(new Error('این جیمیل قبلاً برای حساب دیگری ثبت شده است'), { status: 409 });
+          }
+        }
+      } else {
+        if (['age', 'weight_kg', 'height_cm'].includes(key)) v = v === null || v === '' ? null : Number(v);
+        if (key === 'active') v = v ? 1 : 0;
+        if (v === '') v = null;
+      }
+      fields.push(`${key} = ?`);
+      values.push(v);
     }
   }
   if (!fields.length) return findById(id);
@@ -838,7 +876,7 @@ module.exports = {
   db, DB_PATH, DATA_DIR, sleepSync, execWithRetry,
   all, get, run, now,
   hashPassword, verifyPassword,
-  findByUsername, findById, publicUser, createUser, updateUser, listMembers,
+  findByUsername, findByEmail, normalizeEmail, findById, publicUser, createUser, updateUser, listMembers,
   createSession, sessionUser, renewSession, destroySession, setPassword,
   createAnnouncement, getAnnouncement, listAnnouncements, announcementsFor,
   markAnnouncementRead, updateAnnouncement, deleteAnnouncement,

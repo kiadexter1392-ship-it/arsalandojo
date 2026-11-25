@@ -74,8 +74,6 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
-import com.example.ai.GeminiUiViewModel
-import com.example.ai.ProgressLogsUiState
 import com.example.data.NewProgressLogRequest
 import com.example.data.ProgressAnalytics
 import com.example.data.ProgressLogCategory
@@ -84,6 +82,8 @@ import com.example.ui.components.CloudAccountStatusCard
 import com.example.ui.components.FitnessMilestonesLineChartCard
 import com.example.ui.components.ProgressKpiGrid
 import com.example.ui.components.WorkoutFrequencyChartCard
+import com.example.ui.viewmodel.ProgressLogsUiState
+import com.example.ui.viewmodel.ProgressViewModel
 import com.example.ui.theme.DojoCreamBot
 import com.example.ui.theme.DojoGlassCardFrost
 import com.example.ui.theme.DojoGold
@@ -103,7 +103,7 @@ import kotlin.math.roundToInt
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProgressDashboardScreen(
-    viewModel: GeminiUiViewModel,
+    viewModel: ProgressViewModel,
     userDisplayName: String,
     userEmail: String,
     onSignOut: () -> Unit,
@@ -112,6 +112,9 @@ fun ProgressDashboardScreen(
     val logsState by viewModel.progressLogsState.collectAsStateWithLifecycle()
     val isSaving by viewModel.isSavingProgress.collectAsStateWithLifecycle()
     var showAddSheet by rememberSaveable { mutableStateOf(false) }
+    val progressSummary = remember(logsState) {
+        (logsState as? ProgressLogsUiState.Success)?.let { ProgressAnalytics.compute(it.logs) }
+    }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Box(modifier = Modifier.fillMaxSize()) {
@@ -271,7 +274,7 @@ fun ProgressDashboardScreen(
                             }
 
                             is ProgressLogsUiState.Success -> {
-                                val summary = ProgressAnalytics.compute(state.logs)
+                                val summary = progressSummary ?: ProgressAnalytics.compute(state.logs)
                                 if (!summary.hasAnyLogs) {
                                     item {
                                         EmptyProgressStateCard(
@@ -402,7 +405,7 @@ private fun EmptyProgressStateCard(onAddClick: () -> Unit) {
 private fun ProgressHistoryCard(log: WorkoutProgressLogDoc) {
     val isMilestone = log.resolvedCategory() == ProgressLogCategory.MILESTONE
     val accent = if (isMilestone) DojoGoldDark else DojoPurpleRoyal
-    val jalaliDate = remember(log.sessionDateIso) {
+    val jalaliDate = remember(log.sessionDateIso, log.createdAt) {
         JalaliCalendar.toJalaliFromIso(log.sessionDateIso)
             ?.let { JalaliCalendar.formatJalaliNamed(it) }
             ?: log.createdAt?.toDate()?.time?.let { JalaliCalendar.formatJalaliShort(it) }

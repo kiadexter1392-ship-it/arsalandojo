@@ -91,6 +91,11 @@ fun ProgressKpiGrid(
     summary: ProgressDashboardSummary,
     modifier: Modifier = Modifier
 ) {
+    val workoutsText = remember(summary.totalWorkouts) { JalaliCalendar.faNum(summary.totalWorkouts) }
+    val milestonesText = remember(summary.totalMilestones) { JalaliCalendar.faNum(summary.totalMilestones) }
+    val minutesText = remember(summary.totalMinutes) { JalaliCalendar.faNum(summary.totalMinutes) }
+    val readinessText = remember(summary.averageReadiness) { "${JalaliCalendar.faNum(summary.averageReadiness)}٪" }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -103,14 +108,14 @@ fun ProgressKpiGrid(
         ) {
             ProgressKpiTile(
                 label = stringResource(R.string.progress_kpi_workouts),
-                value = JalaliCalendar.faNum(summary.totalWorkouts),
+                value = workoutsText,
                 icon = Icons.Default.FitnessCenter,
                 accentColor = DojoPurpleRoyal,
                 modifier = Modifier.weight(1f)
             )
             ProgressKpiTile(
                 label = stringResource(R.string.progress_kpi_milestones),
-                value = JalaliCalendar.faNum(summary.totalMilestones),
+                value = milestonesText,
                 icon = Icons.Default.EmojiEvents,
                 accentColor = DojoGoldDark,
                 modifier = Modifier.weight(1f)
@@ -122,14 +127,14 @@ fun ProgressKpiGrid(
         ) {
             ProgressKpiTile(
                 label = stringResource(R.string.progress_kpi_minutes),
-                value = JalaliCalendar.faNum(summary.totalMinutes),
+                value = minutesText,
                 icon = Icons.Default.Schedule,
                 accentColor = DojoPurpleImperial,
                 modifier = Modifier.weight(1f)
             )
             ProgressKpiTile(
                 label = stringResource(R.string.progress_kpi_readiness),
-                value = "${JalaliCalendar.faNum(summary.averageReadiness)}٪",
+                value = readinessText,
                 icon = Icons.Default.Speed,
                 accentColor = DojoGreen,
                 modifier = Modifier.weight(1f)
@@ -336,7 +341,7 @@ fun WorkoutFrequencyChartCard(
                         spacing = 4.dp,
                         cornerRadius = Bars.Data.Radius.Rectangle(topLeft = 6.dp, topRight = 6.dp)
                     ),
-                    animationMode = AnimationMode.Together(delayBuilder = { it * 60L }),
+                    animationMode = AnimationMode.Together(delayBuilder = { it * 25L }),
                     labelHelperProperties = LabelHelperProperties(enabled = false),
                     labelProperties = LabelProperties(
                         enabled = true,
@@ -527,7 +532,7 @@ fun FitnessMilestonesLineChartCard(
                         .testTag("milestones_line_chart"),
                     data = lineSeries,
                     curvedEdges = true,
-                    animationMode = AnimationMode.Together(delayBuilder = { it * 150L }),
+                    animationMode = AnimationMode.Together(delayBuilder = { it * 40L }),
                     maxValue = 105.0,
                     minValue = 0.0,
                     labelHelperProperties = LabelHelperProperties(enabled = false),

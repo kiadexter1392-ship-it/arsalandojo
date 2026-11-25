@@ -6,6 +6,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -50,21 +53,18 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.example.ai.GeminiAiClient
-import com.example.ai.GeminiUiViewModel
-import com.example.ai.configureAppCheck
 import com.example.auth.attemptAutoSignIn
 import com.example.auth.authStateFlow
-import com.example.auth.onGoogleSignInClicked
+import com.example.auth.requestGoogleIdTokenForPortal
 import com.example.auth.signOut
 import com.example.data.DojoCloudRepository
 import com.example.ui.screens.AuthCardContent
 import com.example.ui.screens.DojoPortalScreen
-import com.example.ui.screens.MealPlanScreen
 import com.example.ui.screens.ProgressDashboardScreen
 import com.example.ui.theme.ArslanDojoTheme
 import com.example.ui.theme.DojoGold
 import com.example.ui.theme.DojoInk
+import com.example.ui.viewmodel.ProgressViewModel
 import com.example.util.isCurrentlyConnected
 import com.example.util.observeConnectivity
 import com.google.firebase.auth.FirebaseAuth
@@ -76,20 +76,11 @@ import kotlinx.serialization.Serializable
 object PortalRoute
 
 @Serializable
-object MealPlanRoute
-
-@Serializable
 object ProgressDashboardRoute
-
-private enum class PendingCloudRoute {
-    MEAL_PLAN,
-    PROGRESS
-}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        configureAppCheck(this, intent)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.light(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.light(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT)
@@ -117,14 +108,15 @@ private fun AppNavigation() {
     val networkDisconnectedMsg = stringResource(R.string.error_network_disconnected)
     val networkRestoredMsg = stringResource(R.string.error_network_restored)
     val retryActionLabel = stringResource(R.string.action_retry)
-    val googleSuccessMsg = stringResource(R.string.auth_portal_google_success)
     val googleCancelledMsg = stringResource(R.string.auth_portal_google_cancelled)
 
     var isCheckingAutoSignIn by remember { mutableStateOf(auth.currentUser == null) }
     var isGoogleSigningIn by remember { mutableStateOf(false) }
     var googleAuthError by remember { mutableStateOf<String?>(null) }
+    var portalGoogleIdToken by remember { mutableStateOf<String?>(null) }
+    var portalGoogleTokenTick by remember { mutableIntStateOf(0) }
     var showAuthSheet by rememberSaveable { mutableStateOf(false) }
-    var pendingCloudRouteName by rememberSaveable { mutableStateOf<String?>(null) }
+    var openProgressAfterSignIn by rememberSaveable { mutableStateOf(false) }
     var reloadSignal by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
@@ -142,8 +134,13 @@ private fun AppNavigation() {
         }
     }
 
+    val connectivityFlow = remember(context) { observeConnectivity(context.applicationContext) }
+    val isConnected by connectivityFlow.collectAsStateWithLifecycle(
+        initialValue = isCurrentlyConnected(context.applicationContext)
+    )
+
     val user = currentUser
-    val geminiViewModel: GeminiUiViewModel? = if (user != null) {
+    val progressViewModel: ProgressViewModel? = if (user != null) {
         viewModel(
             key = user.uid,
             factory = viewModelFactory {
@@ -153,14 +150,11 @@ private fun AppNavigation() {
                     }
                     val databaseId = app.getString(R.string.firestore_database_id)
                     val db = FirebaseFirestore.getInstance(databaseId)
-                    GeminiUiViewModel(
-                        aiClient = GeminiAiClient(app),
+                    ProgressViewModel(
                         cloudRepository = DojoCloudRepository(db = db),
                         currentUserId = user.uid,
-                        connectivityFlow = observeConnectivity(app),
+                        connectivityFlow = connectivityFlow,
                         initialConnected = isCurrentlyConnected(app),
-                        savedSuccessMessage = app.getString(R.string.cloud_saved_success),
-                        saveWarningMessage = app.getString(R.string.cloud_save_warning),
                         cloudLoadErrorMessage = app.getString(R.string.error_server_connection),
                         progressSavedMessage = app.getString(R.string.progress_saved_success),
                         progressSaveErrorMessage = app.getString(R.string.progress_save_error)
@@ -172,10 +166,6 @@ private fun AppNavigation() {
         null
     }
 
-    val connectivityFlow = remember(context) { observeConnectivity(context.applicationContext) }
-    val isConnected by connectivityFlow.collectAsStateWithLifecycle(
-        initialValue = isCurrentlyConnected(context.applicationContext)
-    )
     var previousConnected by remember { mutableStateOf<Boolean?>(null) }
 
     LaunchedEffect(isConnected) {
@@ -206,37 +196,26 @@ private fun AppNavigation() {
             isCheckingAutoSignIn = false
             googleAuthError = null
             showAuthSheet = false
-            when (pendingCloudRouteName) {
-                PendingCloudRoute.MEAL_PLAN.name -> {
-                    pendingCloudRouteName = null
-                    navController.navigate(MealPlanRoute) { launchSingleTop = true }
-                }
-                PendingCloudRoute.PROGRESS.name -> {
-                    pendingCloudRouteName = null
-                    navController.navigate(ProgressDashboardRoute) { launchSingleTop = true }
-                }
-                else -> pendingCloudRouteName = null
+            if (openProgressAfterSignIn) {
+                openProgressAfterSignIn = false
+                navController.navigate(ProgressDashboardRoute) { launchSingleTop = true }
             }
         }
     }
 
-    LaunchedEffect(geminiViewModel) {
-        val vm = geminiViewModel ?: return@LaunchedEffect
-        vm.errorEvents.collect { event ->
+    LaunchedEffect(progressViewModel) {
+        val vm = progressViewModel ?: return@LaunchedEffect
+        vm.errorEvents.collect { message ->
             snackbarHostState.currentSnackbarData?.dismiss()
-            val result = snackbarHostState.showSnackbar(
-                message = event.message,
-                actionLabel = if (event.showRetry) retryActionLabel else null,
+            snackbarHostState.showSnackbar(
+                message = message,
                 duration = SnackbarDuration.Long
             )
-            if (result == SnackbarResult.ActionPerformed && event.showRetry) {
-                vm.retryLastRequest()
-            }
         }
     }
 
-    LaunchedEffect(geminiViewModel) {
-        val vm = geminiViewModel ?: return@LaunchedEffect
+    LaunchedEffect(progressViewModel) {
+        val vm = progressViewModel ?: return@LaunchedEffect
         vm.infoEvents.collect { message ->
             snackbarHostState.currentSnackbarData?.dismiss()
             snackbarHostState.showSnackbar(
@@ -250,19 +229,14 @@ private fun AppNavigation() {
         if (isGoogleSigningIn) return
         googleAuthError = null
         isGoogleSigningIn = true
-        onGoogleSignInClicked(
+        requestGoogleIdTokenForPortal(
             context = context,
             credentialManager = credentialManager,
-            onAuthSuccess = {
+            onIdTokenReady = { idToken ->
                 isGoogleSigningIn = false
                 googleAuthError = null
-                scope.launch {
-                    snackbarHostState.currentSnackbarData?.dismiss()
-                    snackbarHostState.showSnackbar(
-                        message = googleSuccessMsg,
-                        duration = SnackbarDuration.Short
-                    )
-                }
+                portalGoogleIdToken = idToken
+                portalGoogleTokenTick++
             },
             onAuthError = { msg ->
                 isGoogleSigningIn = false
@@ -291,7 +265,7 @@ private fun AppNavigation() {
     }
 
     fun handleSignOut() {
-        pendingCloudRouteName = null
+        openProgressAfterSignIn = false
         signOut(
             credentialManager = credentialManager,
             scope = scope,
@@ -330,7 +304,11 @@ private fun AppNavigation() {
         ) {
             NavHost(
                 navController = navController,
-                startDestination = PortalRoute
+                startDestination = PortalRoute,
+                enterTransition = { fadeIn(tween(180)) },
+                exitTransition = { fadeOut(tween(140)) },
+                popEnterTransition = { fadeIn(tween(180)) },
+                popExitTransition = { fadeOut(tween(140)) }
             ) {
                 composable<PortalRoute> {
                     DojoPortalScreen(
@@ -339,18 +317,10 @@ private fun AppNavigation() {
                         googleUserEmail = user?.email.orEmpty(),
                         isGoogleSigningIn = isGoogleSigningIn,
                         googleAuthError = googleAuthError,
+                        portalGoogleIdToken = portalGoogleIdToken,
+                        portalGoogleTokenTick = portalGoogleTokenTick,
+                        onPortalGoogleTokenConsumed = { portalGoogleIdToken = null },
                         onGoogleSignInClick = { triggerPortalGoogleSignIn() },
-                        onOpenMealPlan = {
-                            if (user != null) {
-                                navController.navigate(MealPlanRoute) {
-                                    launchSingleTop = true
-                                }
-                            } else {
-                                googleAuthError = null
-                                pendingCloudRouteName = PendingCloudRoute.MEAL_PLAN.name
-                                showAuthSheet = true
-                            }
-                        },
                         onOpenProgressDashboard = {
                             if (user != null) {
                                 navController.navigate(ProgressDashboardRoute) {
@@ -358,7 +328,7 @@ private fun AppNavigation() {
                                 }
                             } else {
                                 googleAuthError = null
-                                pendingCloudRouteName = PendingCloudRoute.PROGRESS.name
+                                openProgressAfterSignIn = true
                                 showAuthSheet = true
                             }
                         },
@@ -373,34 +343,8 @@ private fun AppNavigation() {
                         }
                     )
                 }
-                composable<MealPlanRoute> {
-                    val vm = geminiViewModel
-                    val activeUser = user
-                    if (vm != null && activeUser != null) {
-                        MealPlanScreen(
-                            viewModel = vm,
-                            userDisplayName = activeUser.displayName.orEmpty(),
-                            userEmail = activeUser.email.orEmpty(),
-                            onSignOut = { handleSignOut() },
-                            onBack = { navController.popBackStack() },
-                            onShowMessage = { message ->
-                                scope.launch {
-                                    snackbarHostState.currentSnackbarData?.dismiss()
-                                    snackbarHostState.showSnackbar(
-                                        message = message,
-                                        duration = SnackbarDuration.Short
-                                    )
-                                }
-                            }
-                        )
-                    } else {
-                        LaunchedEffect(Unit) {
-                            navController.popBackStack(PortalRoute, inclusive = false)
-                        }
-                    }
-                }
                 composable<ProgressDashboardRoute> {
-                    val vm = geminiViewModel
+                    val vm = progressViewModel
                     val activeUser = user
                     if (vm != null && activeUser != null) {
                         ProgressDashboardScreen(
@@ -425,7 +369,7 @@ private fun AppNavigation() {
         ModalBottomSheet(
             onDismissRequest = {
                 showAuthSheet = false
-                pendingCloudRouteName = null
+                openProgressAfterSignIn = false
                 googleAuthError = null
             },
             sheetState = sheetState,

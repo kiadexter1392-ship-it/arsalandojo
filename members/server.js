@@ -180,6 +180,55 @@ app.get('/api/faq', (ctx) => {
 
 /* --------------------------- ثبت‌نام و ورود --------------------------- */
 
+const DEFAULT_GOOGLE_CLIENT_ID = '5918828036-9eq5ut53ujmrub4i1t7039gep5s9a6vi.apps.googleusercontent.com';
+const ALLOWED_GOOGLE_CLIENT_IDS = new Set(
+  String(process.env.GOOGLE_CLIENT_IDS || process.env.GOOGLE_CLIENT_ID || DEFAULT_GOOGLE_CLIENT_ID)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
+
+async function verifyGoogleIdToken(idToken) {
+  const token = String(idToken || '').trim();
+  if (!token || token.length > 4096) {
+    throw Object.assign(new Error('توکن گوگل معتبر نیست'), { status: 400 });
+  }
+  const baseUrl = String(process.env.ARSLAN_GOOGLE_VERIFY_URL || 'https://oauth2.googleapis.com/tokeninfo').trim();
+  const sep = baseUrl.includes('?') ? '&' : '?';
+  const url = `${baseUrl}${sep}id_token=${encodeURIComponent(token)}`;
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(8000)
+    });
+  } catch (err) {
+    throw Object.assign(new Error('امکان تایید حساب گوگل در سرور وجود ندارد؛ اتصال اینترنت را بررسی کنید'), { status: 502 });
+  }
+  let info = {};
+  try { info = await res.json(); } catch { info = {}; }
+  if (!res.ok || !info || info.error) {
+    throw Object.assign(new Error('توکن گوگل نامعتبر یا منقضی شده است'), { status: 401 });
+  }
+  const aud = String(info.aud || '').trim();
+  if (!ALLOWED_GOOGLE_CLIENT_IDS.has(aud)) {
+    throw Object.assign(new Error('توکن گوگل متعلق به این برنامه نیست'), { status: 401 });
+  }
+  const verified = info.email_verified === true || info.email_verified === 'true';
+  const email = String(info.email || '').trim().toLowerCase();
+  if (!verified || !email) {
+    throw Object.assign(new Error('جیمیل حساب گوگل تایید نشده است'), { status: 401 });
+  }
+  if (info.exp && Number(info.exp) * 1000 < Date.now() - 60000) {
+    throw Object.assign(new Error('اعتبار ورود گوگل منقضی شده است؛ لطفاً دوباره تلاش کنید'), { status: 401 });
+  }
+  return {
+    email,
+    name: sanitize(String(info.name || '')).slice(0, 120)
+  };
+}
+
 function doRegister(ctx, b) {
   const full_name = sanitize(String(b.full_name || ''));
   const username = String(b.username || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 30);
@@ -188,6 +237,15 @@ function doRegister(ctx, b) {
   if (full_name.length < 3) return 'نام و نام خانوادگی را کامل وارد کنید';
   if (!/^[a-zA-Z0-9._-]{3,20}$/.test(username)) return 'نام کاربری باید انگلیسی، بدون فاصله و حداقل ۳ حرف باشد';
   if (db.findByUsername(username)) return 'این نام کاربری قبلاً ثبت شده است';
+  let email = null;
+  if (b.email !== undefined && b.email !== null && String(b.email).trim() !== '') {
+    try {
+      email = db.normalizeEmail(b.email);
+    } catch (err) {
+      return err.message || 'آدرس جیمیل معتبر نیست';
+    }
+    if (email && db.findByEmail(email)) return 'این جیمیل قبلاً ثبت شده است';
+  }
   if (password.length < 6) return 'رمز عبور باید حداقل ۶ حرف باشد';
   if (b.phone && !/^[0-9+\-\s]{7,15}$/.test(String(b.phone))) return 'شماره موبایل معتبر نیست';
   if (password !== b.password2) return 'تکرار رمز عبور مطابقت ندارد';
@@ -195,6 +253,7 @@ function doRegister(ctx, b) {
   const user = db.createUser({
     full_name,
     username,
+    email,
     password,
     phone: b.phone || null,
     gender: b.gender || null,
@@ -288,6 +347,38 @@ app.post('/api/login', (ctx) => {
   ctx.json({ ok: true, user: db.publicUser(u) });
 });
 
+app.post('/api/auth/google', async (ctx) => {
+  const ip = ctx.req.headers['x-forwarded-for'] || ctx.req.socket.remoteAddress || '';
+  if (!rateLimit('google-auth:' + ip, 30, 300000)) {
+    return bad(ctx, 'تعداد تلاش بیش از حد — لطفاً چند دقیقه صبر کنید', 429);
+  }
+  const { idToken } = ctx.body || {};
+  const verified = await verifyGoogleIdToken(idToken);
+  const u = db.findByEmail(verified.email);
+  if (!u) {
+    return ctx.json({
+      ok: true,
+      registered: false,
+      email: verified.email,
+      name: verified.name
+    });
+  }
+  if (u.role !== 'member') {
+    return bad(ctx, 'این جیمیل به پنل مربی یا مدیریت متصل است؛ لطفاً با نام کاربری وارد شوید', 403);
+  }
+  if (!u.active) {
+    return bad(ctx, 'حساب کاربری شما غیرفعال است؛ با مربی تماس بگیرید', 403);
+  }
+  authSession.signIn(ctx, u.id, SITE, app.cookieName);
+  db.logActivity(u.id, u.full_name, 'با گوگل وارد پنل کاربری شد', verified.email);
+  ctx.json({
+    ok: true,
+    registered: true,
+    redirect: '/panel',
+    user: db.publicUser(u)
+  });
+});
+
 app.post('/api/logout', (ctx) => {
   authSession.signOut(ctx, app.cookieName, SITE);
   ctx.json({ ok: true });
@@ -314,6 +405,7 @@ app.put('/api/me', (ctx) => {
   if (b.phone && !/^[0-9+\-\s]{7,15}$/.test(String(b.phone))) return bad(ctx, 'شماره موبایل معتبر نیست');
   const updated = db.updateUser(u.id, {
     full_name: b.full_name,
+    email: b.email,
     phone: b.phone,
     gender: b.gender,
     birth_date: b.birth_date,

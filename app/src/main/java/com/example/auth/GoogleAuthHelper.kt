@@ -163,6 +163,95 @@ fun onGoogleSignInClicked(
     }
 }
 
+fun requestGoogleIdTokenForPortal(
+    context: Context,
+    credentialManager: CredentialManager,
+    onIdTokenReady: (String) -> Unit,
+    onAuthError: (String) -> Unit,
+    scope: CoroutineScope,
+    onAuthCancelled: () -> Unit = {}
+) {
+    val clientId = try {
+        context.getString(R.string.default_web_client_id)
+    } catch (_: Exception) {
+        onAuthError("پیکربندی ورود با گوگل یافت نشد.")
+        return
+    }
+    val hostContext = context.findActivity() ?: context
+    scope.launch {
+        if (FirebaseAuth.getInstance().currentUser != null) {
+            try {
+                val silentOption = GetGoogleIdOption.Builder()
+                    .setFilterByAuthorizedAccounts(true)
+                    .setServerClientId(clientId)
+                    .setAutoSelectEnabled(true)
+                    .build()
+                val silentRequest = GetCredentialRequest.Builder()
+                    .addCredentialOption(silentOption)
+                    .build()
+                val silentCred = credentialManager.getCredential(hostContext, silentRequest).credential
+                if (silentCred is CustomCredential && silentCred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                    val token = GoogleIdTokenCredential.createFrom(silentCred.data).idToken
+                    FirebaseAuth.getInstance().signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+                    onIdTokenReady(token)
+                    return@launch
+                }
+            } catch (e: GetCredentialCancellationException) {
+                val detail = e.errorMessage?.toString() ?: e.message
+                if (isConfigurationOrShaError(detail)) {
+                    onAuthError(context.getString(R.string.auth_error_sha1_mismatch))
+                    return@launch
+                }
+                // If auto prompt was dismissed or unavailable, fall through to interactive sign-in option.
+            } catch (e: Exception) {
+                Log.d(TAG, "Silent portal token fetch skipped, falling back to interactive: ${e.message}")
+            }
+        }
+
+        val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(signInOption)
+            .build()
+        try {
+            val cred = credentialManager.getCredential(hostContext, request).credential
+            if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
+                FirebaseAuth.getInstance().signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+                onIdTokenReady(token)
+            } else {
+                onAuthError("نوع اعتبارسنجی دریافت‌شده معتبر نیست.")
+            }
+        } catch (e: GetCredentialCancellationException) {
+            val detail = e.errorMessage?.toString() ?: e.message
+            Log.w(TAG, "Portal Google Sign-In flow cancelled or dismissed: $detail", e)
+            if (isConfigurationOrShaError(detail)) {
+                onAuthError(context.getString(R.string.auth_error_sha1_mismatch))
+            } else {
+                onAuthCancelled()
+            }
+        } catch (e: NoCredentialException) {
+            Log.w(TAG, "No Google account/credential available on device: ${e.message}", e)
+            onAuthError("حساب گوگل معتبری روی این دستگاه یافت نشد. لطفاً ابتدا حساب گوگل خود را روی دستگاه فعال کنید.")
+        } catch (e: GetCredentialException) {
+            val detail = e.errorMessage?.toString() ?: e.localizedMessage ?: e.message
+            Log.e(TAG, "Portal Google Sign-In GetCredentialException (${e.type}): $detail", e)
+            if (isConfigurationOrShaError(detail)) {
+                onAuthError(context.getString(R.string.auth_error_sha1_mismatch))
+            } else {
+                onAuthError(detail ?: "خطا در ورود با حساب گوگل. لطفاً دوباره تلاش کنید.")
+            }
+        } catch (e: Exception) {
+            val detail = e.localizedMessage ?: e.message
+            Log.e(TAG, "Portal Google Sign-In failed: $detail", e)
+            if (isConfigurationOrShaError(detail)) {
+                onAuthError(context.getString(R.string.auth_error_sha1_mismatch))
+            } else {
+                onAuthError(detail ?: "خطا در ورود با حساب گوگل. لطفاً دوباره تلاش کنید.")
+            }
+        }
+    }
+}
+
 fun signOut(
     credentialManager: CredentialManager,
     scope: CoroutineScope,
