@@ -13,6 +13,9 @@
   font-size: 14px;
   line-height: 1.9;
 }
+@media (max-width: 900px), (hover: none) {
+  .academy-app { background-attachment: scroll; }
+}
 .academy-app [hidden] { display: none !important; }
 .academy-app button, .academy-app input, .academy-app textarea, .academy-app select { font: inherit; }
 .academy-app button, .academy-app a, .academy-app input, .academy-app select, .academy-app textarea { -webkit-tap-highlight-color: transparent; }

@@ -936,3 +936,7 @@ form button[type="submit"]:disabled {
   .btn, form button[type="submit"], .toast, .toast.ok { transition: none; animation: none; }
   .toast.ok::after { animation: none; }
 }
+@media (max-width: 900px), (hover: none) {
+  body { background-attachment: scroll; }
+}
+

@@ -241,7 +241,7 @@
                       </div>
                     </div>
                     <div class="row wrap" style="gap:6px">
-                      ${r.receipt_image ? `<button type="button" class="btn sm ghost" data-show-receipt-img="${r.id}">مشاهده تصویر فیش</button>` : '<span class="tiny muted">بدون تصویر</span>'}
+                      ${(r.has_receipt_image || r.receipt_image) ? `<button type="button" class="btn sm ghost" data-show-receipt-img="${r.id}">مشاهده تصویر فیش</button>` : '<span class="tiny muted">بدون تصویر</span>'}
                     </div>
                   </div>
                   <div class="row wrap" style="gap:8px;margin-top:12px;align-items:center">
@@ -287,11 +287,12 @@
       target.querySelectorAll('[data-show-receipt-img]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const rec = receipts.find((x) => String(x.id) === btn.dataset.showReceiptImg);
-          if (!rec || !rec.receipt_image) return;
+          if (!rec || (!rec.has_receipt_image && !rec.receipt_image)) return;
+          const src = rec.receipt_image || `${PATH_PREFIX}/api/tuition/receipts/${encodeURIComponent(rec.id)}/image`;
           modal({
             title: `فیش ${rec.full_name} — ${J.MONTHS[rec.month - 1]} ${fa(rec.year)}`,
             wide: true,
-            body: `<div style="text-align:center"><img src="${rec.receipt_image}" alt="فیش پرداخت" style="max-width:100%;max-height:72vh;border-radius:12px"></div>`,
+            body: `<div style="text-align:center"><img src="${esc(src)}" decoding="async" alt="فیش پرداخت" style="max-width:100%;max-height:72vh;border-radius:12px"></div>`,
             actions: [{ label: 'بستن', class: 'ghost', onClick: closeModal }]
           });
         });

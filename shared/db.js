@@ -9,6 +9,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { lifetimeSeconds, RENEW_INTERVAL_SECONDS } = require('./session-policy');
 const { normalizeMemberDetails } = require('./member-details');
+const storage = require('./storage');
 const { DatabaseSync } = require('node:sqlite');
 
 const DATA_DIR = process.env.ARSLAN_DATA_DIR || path.join(__dirname, '..', 'data');
@@ -32,7 +33,7 @@ function sleepSync(ms) {
 function execWithRetry(sql, tries = 20) {
   for (let i = 0; i < tries; i += 1) {
     try { db.exec(sql); return; } catch (err) {
-      if (err && err.errcode === 5 /* SQLITE_BUSY */ && i < tries - 1) { sleepSync(120 * (i + 1)); continue; }
+      if (err && (err.errcode === 5 || err.errcode === 6) /* SQLITE_BUSY/LOCKED */ && i < tries - 1) { sleepSync(120 * (i + 1)); continue; }
       throw err;
     }
   }
@@ -58,6 +59,12 @@ for (let attempt = 0; attempt < 25; attempt += 1) {
     break;
   }
 }
+
+try {
+  db.exec('PRAGMA synchronous = NORMAL;');
+  db.exec('PRAGMA temp_store = MEMORY;');
+  db.exec('PRAGMA cache_size = -16000;');
+} catch { /* غیرحیاتی */ }
 
 db.exec('PRAGMA foreign_keys = ON;');
 
@@ -271,6 +278,9 @@ CREATE INDEX IF NOT EXISTS idx_assign_user ON plan_assignments(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, read);
 CREATE INDEX IF NOT EXISTS idx_att_user_date ON member_attendance(user_id, session_date DESC);
 CREATE INDEX IF NOT EXISTS idx_receipts_user_ym ON tuition_receipts(user_id, year, month);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_receipts_status_created ON tuition_receipts(status, created_at DESC);
 `);
 
 /* -------- مهاجرت: افزودن ستون discipline در صورت نبود -------- */
@@ -288,33 +298,24 @@ try {
   }
 } catch { /* نادیده */ }
 
-/* Adding a nullable field preserves all existing members; both servers may start together. */
+/* Adding nullable fields preserves all existing members; both servers may start together. */
 execWithRetry('BEGIN IMMEDIATE');
 try {
-  if (!all("PRAGMA table_info('users')").some(c => c.name === 'blood_group')) {
-    db.exec('ALTER TABLE users ADD COLUMN blood_group TEXT DEFAULT NULL');
-  }
-  if (!all("PRAGMA table_info('users')").some(c => c.name === 'email')) {
-    db.exec('ALTER TABLE users ADD COLUMN email TEXT DEFAULT NULL');
-  }
-  if (!all("PRAGMA table_info('users')").some(c => c.name === 'avatar_photo')) {
-    db.exec('ALTER TABLE users ADD COLUMN avatar_photo TEXT DEFAULT NULL');
-  }
-  if (!all("PRAGMA table_info('users')").some(c => c.name === 'avatar_updated_at')) {
-    db.exec('ALTER TABLE users ADD COLUMN avatar_updated_at TEXT DEFAULT NULL');
-  }
-  if (!all("PRAGMA table_info('users')").some(c => c.name === 'insurance_file')) {
-    db.exec('ALTER TABLE users ADD COLUMN insurance_file TEXT DEFAULT NULL');
-  }
-  if (!all("PRAGMA table_info('users')").some(c => c.name === 'insurance_file_name')) {
-    db.exec('ALTER TABLE users ADD COLUMN insurance_file_name TEXT DEFAULT NULL');
-  }
-  if (!all("PRAGMA table_info('users')").some(c => c.name === 'insurance_updated_at')) {
-    db.exec('ALTER TABLE users ADD COLUMN insurance_updated_at TEXT DEFAULT NULL');
-  }
-  if (!all("PRAGMA table_info('users')").some(c => c.name === 'last_seen_at')) {
-    db.exec('ALTER TABLE users ADD COLUMN last_seen_at TEXT DEFAULT NULL');
-  }
+  const userCols = new Set(all("PRAGMA table_info('users')").map(c => c.name));
+  if (!userCols.has('blood_group')) db.exec('ALTER TABLE users ADD COLUMN blood_group TEXT DEFAULT NULL');
+  if (!userCols.has('email')) db.exec('ALTER TABLE users ADD COLUMN email TEXT DEFAULT NULL');
+  if (!userCols.has('avatar_photo')) db.exec('ALTER TABLE users ADD COLUMN avatar_photo TEXT DEFAULT NULL');
+  if (!userCols.has('avatar_key')) db.exec('ALTER TABLE users ADD COLUMN avatar_key TEXT DEFAULT NULL');
+  if (!userCols.has('avatar_updated_at')) db.exec('ALTER TABLE users ADD COLUMN avatar_updated_at TEXT DEFAULT NULL');
+  if (!userCols.has('insurance_file')) db.exec('ALTER TABLE users ADD COLUMN insurance_file TEXT DEFAULT NULL');
+  if (!userCols.has('insurance_key')) db.exec('ALTER TABLE users ADD COLUMN insurance_key TEXT DEFAULT NULL');
+  if (!userCols.has('insurance_file_name')) db.exec('ALTER TABLE users ADD COLUMN insurance_file_name TEXT DEFAULT NULL');
+  if (!userCols.has('insurance_updated_at')) db.exec('ALTER TABLE users ADD COLUMN insurance_updated_at TEXT DEFAULT NULL');
+  if (!userCols.has('last_seen_at')) db.exec('ALTER TABLE users ADD COLUMN last_seen_at TEXT DEFAULT NULL');
+
+  const recCols = new Set(all("PRAGMA table_info('tuition_receipts')").map(c => c.name));
+  if (!recCols.has('receipt_key')) db.exec('ALTER TABLE tuition_receipts ADD COLUMN receipt_key TEXT DEFAULT NULL');
+
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(lower(email)) WHERE email IS NOT NULL AND email != ''");
   db.exec('COMMIT');
 } catch (err) {
@@ -347,6 +348,50 @@ try {
   }
   db.exec('COMMIT');
 } catch (error) { db.exec('ROLLBACK'); throw error; }
+
+execWithRetry(`
+CREATE INDEX IF NOT EXISTS idx_users_role_act ON users(role, active);
+CREATE INDEX IF NOT EXISTS idx_activity_created ON activity(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_plans_created ON plans(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reports_user_ym ON self_reports(user_id, year, month);
+`);
+
+/* انتقال خودکار فایل‌های Base64 قدیمی از داخل دیتابیس به فضای ذخیره‌سازی مجزا */
+function migrateLegacyBlobsToStorage() {
+  try {
+    const oldAvatars = all("SELECT id, avatar_photo FROM users WHERE avatar_photo IS NOT NULL AND avatar_photo != '' AND avatar_key IS NULL");
+    for (const row of oldAvatars) {
+      try {
+        const saved = storage.putDataUrl('avatars', row.avatar_photo, {
+          allowedMimes: ['image/png', 'image/jpeg', 'image/webp'],
+          maxBytes: 2 * 1024 * 1024
+        });
+        run('UPDATE users SET avatar_key = ?, avatar_photo = NULL WHERE id = ? AND avatar_key IS NULL', saved.key, row.id);
+      } catch { /* keep unparseable legacy rows intact without crashing startup */ }
+    }
+    const oldIns = all("SELECT id, insurance_file FROM users WHERE insurance_file IS NOT NULL AND insurance_file != '' AND insurance_key IS NULL");
+    for (const row of oldIns) {
+      try {
+        const saved = storage.putDataUrl('insurance', row.insurance_file, {
+          allowedMimes: ['image/png', 'image/jpeg', 'image/webp', 'application/pdf'],
+          maxBytes: 2 * 1024 * 1024
+        });
+        run('UPDATE users SET insurance_key = ?, insurance_file = NULL WHERE id = ? AND insurance_key IS NULL', saved.key, row.id);
+      } catch { /* ignore */ }
+    }
+    const oldReceipts = all("SELECT id, receipt_image FROM tuition_receipts WHERE receipt_image IS NOT NULL AND receipt_image != '' AND receipt_key IS NULL");
+    for (const row of oldReceipts) {
+      try {
+        const saved = storage.putDataUrl('receipts', row.receipt_image, {
+          allowedMimes: ['image/png', 'image/jpeg', 'image/webp'],
+          maxBytes: 2 * 1024 * 1024
+        });
+        run('UPDATE tuition_receipts SET receipt_key = ?, receipt_image = NULL WHERE id = ? AND receipt_key IS NULL', saved.key, row.id);
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore transient lock during concurrent boot */ }
+}
+migrateLegacyBlobsToStorage();
 
 /* -------------------------------- رمز عبور -------------------------------- */
 
@@ -451,10 +496,10 @@ function publicUser(u) {
     join_date: u.join_date,
     notes: u.notes,
     avatar_color: u.avatar_color,
-    has_photo: !!u.avatar_photo,
+    has_photo: !!(u.avatar_key || u.avatar_photo),
     photo_updated_at: u.avatar_updated_at || null,
     discipline: u.discipline || null,
-    has_insurance: !!u.insurance_file,
+    has_insurance: !!(u.insurance_key || u.insurance_file),
     insurance_file_name: u.insurance_file_name || null,
     insurance_updated_at: u.insurance_updated_at || null,
     last_seen_at: u.last_seen_at || null,
@@ -536,54 +581,122 @@ function updateUser(id, data) {
   values.push(now());
   values.push(Number(id));
   run(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, ...values);
-  if (data.active === false || data.active === 0) run('DELETE FROM sessions WHERE user_id=?',Number(id));
+  if (data.active === false || data.active === 0) run('DELETE FROM sessions WHERE user_id=?', Number(id));
   return findById(id);
 }
 
 function getUserInsurance(id) {
-  const row = get('SELECT id, insurance_file, insurance_file_name, insurance_updated_at FROM users WHERE id = ?', Number(id));
+  const row = get('SELECT id, insurance_key, insurance_file, insurance_file_name, insurance_updated_at FROM users WHERE id = ?', Number(id));
   if (!row) return null;
+  let fileData = null;
+  let storageUrl = null;
+  if (row.insurance_key) {
+    fileData = storage.getObjectDataUrl(row.insurance_key);
+    storageUrl = storage.signedPublicUrl(row.insurance_key, { ownerId: row.id });
+  } else if (row.insurance_file) {
+    fileData = row.insurance_file;
+  }
   return {
-    has_insurance: !!row.insurance_file,
-    file_data: row.insurance_file || null,
+    has_insurance: !!fileData,
+    file_data: fileData,
     file_name: row.insurance_file_name || null,
+    storage_url: storageUrl,
     updated_at: row.insurance_updated_at || null
   };
 }
 
 function setUserInsurance(id, { fileData = null, fileName = null } = {}) {
+  const uid = Number(id);
+  const prev = get('SELECT insurance_key FROM users WHERE id = ?', uid);
   const ts = now();
+  let newKey = null;
+  if (fileData) {
+    const saved = storage.putDataUrl('insurance', fileData, {
+      allowedMimes: ['image/png', 'image/jpeg', 'image/webp', 'application/pdf'],
+      maxBytes: 1850000
+    });
+    newKey = saved.key;
+  }
   run(
-    'UPDATE users SET insurance_file = ?, insurance_file_name = ?, insurance_updated_at = ?, updated_at = ? WHERE id = ?',
-    fileData || null,
-    fileData ? (fileName || null) : null,
-    fileData ? ts : null,
+    'UPDATE users SET insurance_key = ?, insurance_file = NULL, insurance_file_name = ?, insurance_updated_at = ?, updated_at = ? WHERE id = ?',
+    newKey,
+    newKey ? (fileName || null) : null,
+    newKey ? ts : null,
     ts,
-    Number(id)
+    uid
   );
-  return findById(id);
+  if (prev && prev.insurance_key && prev.insurance_key !== newKey) {
+    storage.deleteObject(prev.insurance_key);
+  }
+  return findById(uid);
 }
 
 function getUserPhoto(id) {
-  const row = get('SELECT id, avatar_photo, avatar_updated_at FROM users WHERE id = ?', Number(id));
+  const row = get('SELECT id, avatar_key, avatar_photo, avatar_updated_at FROM users WHERE id = ?', Number(id));
   if (!row) return null;
-  return {
-    has_photo: !!row.avatar_photo,
-    photo_data: row.avatar_photo || null,
-    updated_at: row.avatar_updated_at || null
-  };
+  if (row.avatar_key) {
+    const obj = storage.getObject(row.avatar_key);
+    if (obj) {
+      return {
+        has_photo: true,
+        buffer: obj.buffer,
+        mime: obj.mime,
+        etag: obj.etag,
+        photo_data: storage.toDataUrl(obj.buffer, obj.mime),
+        storage_url: storage.signedPublicUrl(row.avatar_key, { ownerId: row.id }),
+        updated_at: row.avatar_updated_at || null
+      };
+    }
+  }
+  if (row.avatar_photo) {
+    return {
+      has_photo: true,
+      buffer: null,
+      mime: null,
+      etag: null,
+      photo_data: row.avatar_photo,
+      storage_url: null,
+      updated_at: row.avatar_updated_at || null
+    };
+  }
+  return { has_photo: false, buffer: null, mime: null, etag: null, photo_data: null, storage_url: null, updated_at: null };
 }
 
 function setUserPhoto(id, photoData = null) {
+  const uid = Number(id);
+  const prev = get('SELECT avatar_key FROM users WHERE id = ?', uid);
   const ts = now();
+  let newKey = null;
+  if (photoData) {
+    const saved = storage.putDataUrl('avatars', photoData, {
+      allowedMimes: ['image/png', 'image/jpeg', 'image/webp'],
+      maxBytes: 1050000
+    });
+    newKey = saved.key;
+  }
   run(
-    'UPDATE users SET avatar_photo = ?, avatar_updated_at = ?, updated_at = ? WHERE id = ?',
-    photoData || null,
-    photoData ? ts : null,
+    'UPDATE users SET avatar_key = ?, avatar_photo = NULL, avatar_updated_at = ?, updated_at = ? WHERE id = ?',
+    newKey,
+    newKey ? ts : null,
     ts,
-    Number(id)
+    uid
   );
-  return findById(id);
+  if (prev && prev.avatar_key && prev.avatar_key !== newKey) {
+    storage.deleteObject(prev.avatar_key);
+  }
+  return findById(uid);
+}
+
+function deleteUser(id) {
+  const uid = Number(id);
+  const prev = get('SELECT avatar_key, insurance_key FROM users WHERE id = ?', uid);
+  const recs = all('SELECT receipt_key FROM tuition_receipts WHERE user_id = ? AND receipt_key IS NOT NULL', uid);
+  run('DELETE FROM users WHERE id = ?', uid);
+  if (prev && prev.avatar_key) storage.deleteObject(prev.avatar_key);
+  if (prev && prev.insurance_key) storage.deleteObject(prev.insurance_key);
+  for (const r of recs) {
+    if (r.receipt_key) storage.deleteObject(r.receipt_key);
+  }
 }
 
 function listMembers(query = {}) {
@@ -605,11 +718,17 @@ function listMembers(query = {}) {
 
 /* --------------------------------- نشست‌ها -------------------------------- */
 
+let _lastSessionPrune = 0;
 function createSession(userId, site, days = 30) {
   const token = crypto.randomBytes(32).toString('hex');
+  const ts = now();
   const expires = new Date(Date.now() + days * 864e5).toISOString();
+  if (Date.now() - _lastSessionPrune > 300000) {
+    _lastSessionPrune = Date.now();
+    try { run('DELETE FROM sessions WHERE expires_at <= ?', ts); } catch { /* ignore */ }
+  }
   run('INSERT INTO sessions (token, user_id, site, created_at, expires_at) VALUES (?,?,?,?,?)',
-    token, Number(userId), site, now(), expires);
+    token, Number(userId), site, ts, expires);
   return { token, expires };
 }
 
@@ -816,14 +935,57 @@ function consecutiveAbsences(userId) {
 
 function createTuitionReceipt({ user_id, year, month, amount_toman, card_last4, tracking_code, receipt_image, note }) {
   const ts = now();
+  let receiptKey = null;
+  if (receipt_image) {
+    const saved = storage.putDataUrl('receipts', receipt_image, {
+      allowedMimes: ['image/png', 'image/jpeg', 'image/webp'],
+      maxBytes: 1350000
+    });
+    receiptKey = saved.key;
+  }
   const info = run(
-    `INSERT INTO tuition_receipts (user_id, year, month, amount_toman, card_last4, tracking_code, receipt_image, note, status, created_at)
-     VALUES (?,?,?,?,?,?,?,?, 'pending', ?)`,
+    `INSERT INTO tuition_receipts (user_id, year, month, amount_toman, card_last4, tracking_code, receipt_key, receipt_image, note, status, created_at)
+     VALUES (?,?,?,?,?,?,?,NULL,?, 'pending', ?)`,
     Number(user_id), Number(year), Number(month), Number(amount_toman),
-    card_last4 || null, String(tracking_code).trim(), receipt_image || null,
+    card_last4 || null, String(tracking_code).trim(), receiptKey,
     note ? String(note).trim().slice(0, 500) : null, ts
   );
-  return get('SELECT * FROM tuition_receipts WHERE id = ?', Number(info.lastInsertRowid));
+  const row = get(
+    `SELECT id, user_id, year, month, amount_toman, card_last4, tracking_code, note, status, coach_note, reviewed_by, reviewed_at, created_at,
+            (receipt_key IS NOT NULL OR (receipt_image IS NOT NULL AND receipt_image != '')) AS has_receipt_image
+     FROM tuition_receipts WHERE id = ?`,
+    Number(info.lastInsertRowid)
+  );
+  if (row) row.has_receipt_image = !!row.has_receipt_image;
+  return row;
+}
+
+function getTuitionReceiptImage(id) {
+  const row = get('SELECT id, user_id, year, month, receipt_key, receipt_image FROM tuition_receipts WHERE id = ?', Number(id));
+  if (!row) return null;
+  if (row.receipt_key) {
+    const obj = storage.getObject(row.receipt_key);
+    if (obj) {
+      return {
+        receipt: { id: row.id, user_id: row.user_id, year: row.year, month: row.month },
+        buffer: obj.buffer,
+        mime: obj.mime,
+        etag: obj.etag,
+        storage_url: storage.signedPublicUrl(row.receipt_key, { ownerId: row.user_id })
+      };
+    }
+  }
+  if (row.receipt_image) {
+    return {
+      receipt: { id: row.id, user_id: row.user_id, year: row.year, month: row.month },
+      dataUrl: row.receipt_image,
+      buffer: null,
+      mime: null,
+      etag: null,
+      storage_url: null
+    };
+  }
+  return { receipt: { id: row.id, user_id: row.user_id, year: row.year, month: row.month }, buffer: null, mime: null, etag: null, dataUrl: null, storage_url: null };
 }
 
 function listTuitionReceipts({ user_id, status, year, month, limit = 100 } = {}) {
@@ -835,8 +997,12 @@ function listTuitionReceipts({ user_id, status, year, month, limit = 100 } = {})
   if (month) { where.push('r.month = ?'); params.push(Number(month)); }
   params.push(Number(limit));
   return all(
-    `SELECT r.*, u.full_name, u.username, u.discipline, u.belt, u.avatar_color,
-            (u.avatar_photo IS NOT NULL AND u.avatar_photo != '') AS has_photo, u.avatar_updated_at AS photo_updated_at,
+    `SELECT r.id, r.user_id, r.year, r.month, r.amount_toman, r.card_last4, r.tracking_code,
+            r.note, r.status, r.coach_note, r.reviewed_by, r.reviewed_at, r.created_at,
+            (r.receipt_key IS NOT NULL OR (r.receipt_image IS NOT NULL AND r.receipt_image != '')) AS has_receipt_image,
+            u.full_name, u.username, u.discipline, u.belt, u.avatar_color,
+            (u.avatar_key IS NOT NULL OR (u.avatar_photo IS NOT NULL AND u.avatar_photo != '')) AS has_photo,
+            u.avatar_updated_at AS photo_updated_at,
             rv.full_name AS reviewer_name
      FROM tuition_receipts r
      JOIN users u ON u.id = r.user_id
@@ -845,20 +1011,27 @@ function listTuitionReceipts({ user_id, status, year, month, limit = 100 } = {})
      ORDER BY CASE r.status WHEN 'pending' THEN 0 WHEN 'rejected' THEN 1 ELSE 2 END, r.created_at DESC
      LIMIT ?`,
     ...params
-  );
+  ).map((r) => ({ ...r, has_receipt_image: !!r.has_receipt_image, has_photo: !!r.has_photo }));
 }
 
 function reviewTuitionReceipt(id, { status, coach_note }, coach_id) {
   if (!['approved', 'rejected'].includes(status)) {
     throw Object.assign(new Error('وضعیت بررسی نامعتبر است'), { status: 400 });
   }
-  const existing = get('SELECT * FROM tuition_receipts WHERE id = ?', Number(id));
+  const existing = get('SELECT id FROM tuition_receipts WHERE id = ?', Number(id));
   if (!existing) return null;
   run(
     'UPDATE tuition_receipts SET status = ?, coach_note = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?',
     status, coach_note ? String(coach_note).trim().slice(0, 500) : null, coach_id || null, now(), existing.id
   );
-  return get('SELECT * FROM tuition_receipts WHERE id = ?', existing.id);
+  const row = get(
+    `SELECT id, user_id, year, month, amount_toman, card_last4, tracking_code, note, status, coach_note, reviewed_by, reviewed_at, created_at,
+            (receipt_key IS NOT NULL OR (receipt_image IS NOT NULL AND receipt_image != '')) AS has_receipt_image
+     FROM tuition_receipts WHERE id = ?`,
+    existing.id
+  );
+  if (row) row.has_receipt_image = !!row.has_receipt_image;
+  return row;
 }
 
 function memberCareStatus(userId, jy, jm, jd) {
@@ -1137,10 +1310,10 @@ function revokeApiKey(keyId, userId) {
 }
 
 module.exports = {
-  db, DB_PATH, DATA_DIR, sleepSync, execWithRetry,
+  db, DB_PATH, DATA_DIR, storage, sleepSync, execWithRetry,
   all, get, run, now,
   hashPassword, verifyPassword,
-  findByUsername, findByEmail, normalizeEmail, findById, publicUser, createUser, updateUser, listMembers,
+  findByUsername, findByEmail, normalizeEmail, findById, publicUser, createUser, updateUser, deleteUser, listMembers,
   getUserInsurance, setUserInsurance,
   getUserPhoto, setUserPhoto,
   ONLINE_WINDOW_MS, isUserOnline, touchUserPresence, clearUserPresence,
@@ -1149,7 +1322,7 @@ module.exports = {
   markAnnouncementRead, updateAnnouncement, deleteAnnouncement,
   pushNotification, notificationsFor, unreadCount, markNotificationsRead, markNotificationRead,
   recordAttendance, listAttendanceByDate, consecutiveAbsences,
-  createTuitionReceipt, listTuitionReceipts, reviewTuitionReceipt, memberCareStatus,
+  createTuitionReceipt, getTuitionReceiptImage, listTuitionReceipts, reviewTuitionReceipt, memberCareStatus,
   createPlan, getPlan, listPlans, updatePlan, deletePlan, plansForUser, setAssignmentStatus,
   METRIC_KEYS, computeOverall, progressRow, progressYear, saveProgress, deleteProgress,
   saveSelfReport, clubMatrix, logActivity, recentActivity, stats,

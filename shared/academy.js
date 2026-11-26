@@ -5,7 +5,7 @@ const db = require('./db');
 const authSession = require('./auth-session');
 const schema = require('./academy-schema');
 const { todayJalali, enNum } = require('./jalali');
-const { rateLimit } = require('./server');
+const { rateLimit, getClientIp } = require('./server');
 const SPORTS = ['کاراته','کراسفیت','بوکس','ژیمناستیک','موی تای'];
 // Administrative operations never appear in student/coach services, even read-only.
 const ADMIN_ONLY = new Set(['attendance','meetings','discounts']);
@@ -480,7 +480,11 @@ function mount(app, options) {
   }
   function mutating(ctx) {
     const origin = ctx.req.headers.origin;
-    if (ctx.req.headers['x-academy-request'] !== '1' || (origin && new URL(origin).host !== (ctx.req.headers['x-dojo-origin-host'] || ctx.req.headers.host))) fail('درخواست امن معتبر نیست',403);
+    let originHost = null;
+    if (origin) {
+      try { originHost = new URL(origin).host; } catch { fail('درخواست امن معتبر نیست', 403); }
+    }
+    if (ctx.req.headers['x-academy-request'] !== '1' || (originHost && originHost !== (ctx.req.headers['x-dojo-origin-host'] || ctx.req.headers.host))) fail('درخواست امن معتبر نیست', 403);
   }
   const pagePath = admin ? '/admin' : '/academy';
   function page(ctx) {
@@ -494,7 +498,7 @@ function mount(app, options) {
   if (admin) {
     app.post(base+'/login', ctx => {
       mutating(ctx);
-      if (!rateLimit('academy-admin:'+ctx.req.socket.remoteAddress,5,300000)) fail('تعداد تلاش زیاد است؛ بعداً تلاش کنید',429);
+      if (!rateLimit('academy-admin:' + getClientIp(ctx.req), 5, 300000)) fail('تعداد تلاش زیاد است؛ بعداً تلاش کنید', 429);
       const user = db.findByUsername(String(ctx.body.username || '').trim());
       if (!user || !user.active || !db.get('SELECT user_id FROM academy_admins WHERE user_id=?',user.id) || !db.verifyPassword(ctx.body.password,user.password_hash,user.password_salt)) fail('نام کاربری یا رمز مدیر صحیح نیست',401);
       authSession.signIn(ctx, user.id, 'admin', ADMIN_COOKIE);
@@ -549,7 +553,7 @@ function mount(app, options) {
     })});
   });
   if (admin) {
-    app.get(base+'/review',ctx=>{auth(ctx); const tables=['users','progress','plans','plan_assignments','announcements','announcement_reads','activity','notifications','self_reports']; ctx.json({ok:true,groups:tables.map(table=>({table,count:db.get(`SELECT COUNT(*) AS c FROM ${table} WHERE verified=0`).c,rows:db.all(`SELECT * FROM ${table} WHERE verified=0 LIMIT 100`).map(row=>{delete row.password_hash; delete row.password_salt; return row;})}))});});
+    app.get(base+'/review',ctx=>{auth(ctx); const tables=['users','progress','plans','plan_assignments','announcements','announcement_reads','activity','notifications','self_reports']; ctx.json({ok:true,groups:tables.map(table=>({table,count:db.get(`SELECT COUNT(*) AS c FROM ${table} WHERE verified=0`).c,rows:db.all(`SELECT * FROM ${table} WHERE verified=0 LIMIT 100`).map(row=>{delete row.password_hash; delete row.password_salt; delete row.avatar_photo; delete row.avatar_key; delete row.insurance_file; delete row.insurance_key; return row;})}))});});
     app.post(base+'/review/:table/:id',ctx=>{
       mutating(ctx);const u=auth(ctx);const table=ctx.params.table;
       if(!['users','progress','plans','plan_assignments','announcements','announcement_reads','activity','notifications','self_reports'].includes(table)) fail('بخش نامعتبر');

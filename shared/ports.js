@@ -1,6 +1,7 @@
 'use strict';
 
 // Public student gateway :8080; dedicated coach :4174; member backend :4173.
+// Storage service runs separately via readStoragePort (default :4175).
 function readPorts(env = process.env) {
   const values = {
     gateway: Number(env.PORT || 8080),
@@ -18,4 +19,19 @@ function readPorts(env = process.env) {
   }
   return values;
 }
-module.exports = { readPorts };
+
+function readStoragePort(env = process.env) {
+  const value = Number(env.STORAGE_PORT !== undefined && env.STORAGE_PORT !== '' ? env.STORAGE_PORT : 4175);
+  if (!Number.isInteger(value) || value < 0 || value > 65535) {
+    throw new Error(`Invalid storage port: ${value}`);
+  }
+  if (value > 0) {
+    const appPorts = readPorts(env);
+    if (Object.values(appPorts).filter(Boolean).includes(value)) {
+      throw new Error('STORAGE_PORT must be different from PORT, COACH_PORT and MEMBER_PORT.');
+    }
+  }
+  return value;
+}
+
+module.exports = { readPorts, readStoragePort };

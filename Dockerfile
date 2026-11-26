@@ -19,7 +19,8 @@ COPY start.js ./
 COPY coach ./coach
 COPY members ./members
 COPY shared ./shared
+COPY storage ./storage
 COPY --from=gooey-build /app/shared/public/gooey-demo ./shared/public/gooey-demo
 COPY scripts ./scripts
-EXPOSE 8080 4174
+EXPOSE 8080 4174 4175
 CMD ["node", "start.js"]

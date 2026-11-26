@@ -145,7 +145,7 @@
       } else if (!isCoach && user.role !== 'coach') {
         src = PATH_PREFIX + '/api/me/photo' + ver;
       }
-      if (src) img = `<img class="avatar-img" src="${esc(src)}" alt="${esc((user && user.full_name) || 'تصویر پروفایل')}">`;
+      if (src) img = `<img class="avatar-img" decoding="async" src="${esc(src)}" alt="${esc((user && user.full_name) || 'تصویر پروفایل')}">`;
     }
     return `<span class="avatar ${size}" style="--c:${esc(c)}">${esc(initials(user && user.full_name))}${img}</span>`;
   }

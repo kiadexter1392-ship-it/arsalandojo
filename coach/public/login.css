@@ -6,6 +6,9 @@ body.coach-login {
   color: var(--text);
   min-height: 100vh;
 }
+@media (max-width: 900px), (hover: none) {
+  body.coach-login { background-attachment: scroll; }
+}
 .coach-login-nav {
   display: flex;
   justify-content: space-between;

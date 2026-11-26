@@ -7,7 +7,7 @@
 const path = require('node:path');
 const { readPorts } = require('../shared/ports');
 const { proxy } = require('../shared/proxy');
-const { createServer, rateLimit, sanitize } = require('../shared/server');
+const { createServer, rateLimit, sanitize, getClientIp, parseId } = require('../shared/server');
 const db = require('../shared/db');
 const authSession = require('../shared/auth-session');
 const { seedIfEmpty, DEMO } = require('../shared/seed');
@@ -18,7 +18,11 @@ function todayISODate() {
 }
 
 function csvRow(cells) {
-  return cells.map((c) => `"${String(c === null || c === undefined ? '' : c).replace(/"/g, '""')}"`).join(',');
+  return cells.map((c) => {
+    let s = String(c === null || c === undefined ? '' : c);
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return `"${s.replace(/"/g, '""')}"`;
+  }).join(',');
 }
 
 const { coach: PORT, member: MEMBER_PORT } = readPorts();
@@ -35,7 +39,8 @@ const app = createServer({
   cookieName: 'arslan_coach_session',
   publicDirs: [PUBLIC_DIR, SHARED_PUBLIC],
   onRequest(req, res) {
-    const url = new URL(req.url, 'http://localhost');
+    let url;
+    try { url = new URL(req.url, 'http://localhost'); } catch { return false; }
     if (url.pathname === '/member') {
       res.writeHead(302, { Location: '/member/' + url.search });
       res.end();
@@ -105,13 +110,17 @@ app.get('/dashboard', (ctx) => {
   ctx.file(path.join(PUBLIC_DIR, 'dashboard.html'));
 });
 
+app.get('/healthz', (ctx) => {
+  ctx.json({ ok: true, site: SITE, storageSeparate: true });
+});
+
 /* -------------------------------- پیکربندی -------------------------------- */
 
 app.get('/api/config', (ctx) => {
   const j = todayJalali();
   ctx.json({
     ok: true,
-    features: { academy: 'v1', independentAdmin: true, sampleData: false },
+    features: { academy: 'v1', independentAdmin: true, sampleData: false, isolatedStorage: true },
     release: process.env.RAILWAY_GIT_COMMIT_SHA || 'local',
     site: 'coach',
     club: 'باشگاه آنلاین ارسلان دوجو',
@@ -131,13 +140,13 @@ app.get('/api/config', (ctx) => {
 /* ------------------------------ ورود و خروج ------------------------------ */
 
 app.post('/api/login', (ctx) => {
-  const ip = ctx.req.headers['x-forwarded-for'] || ctx.req.socket.remoteAddress || '';
+  const ip = getClientIp(ctx.req);
   if (!rateLimit('coach-login:' + ip, 10, 300000)) {
     return bad(ctx, 'تعداد تلاش بیش از حد — لطفاً ۵ دقیقه صبر کنید', 429);
   }
   const { username, password } = ctx.body || {};
   const user = db.findByUsername(username);
-  if (!user || user.role !== 'coach' || db.get('SELECT user_id FROM academy_admins WHERE user_id=?',user.id) || !db.verifyPassword(password, user.password_hash, user.password_salt)) {
+  if (!user || user.role !== 'coach' || db.get('SELECT user_id FROM academy_admins WHERE user_id=?', user.id) || !db.verifyPassword(password, user.password_hash, user.password_salt)) {
     return bad(ctx, 'نام کاربری یا رمز عبور اشتباه است', 401);
   }
   if (!user.active) return bad(ctx, 'این حساب غیرفعال شده است', 403);
@@ -147,14 +156,14 @@ app.post('/api/login', (ctx) => {
 });
 
 app.post('/login', (ctx) => {
-  const ip = ctx.req.headers['x-forwarded-for'] || ctx.req.socket.remoteAddress || '';
+  const ip = getClientIp(ctx.req);
   if (!rateLimit('coach-login:' + ip, 10, 300000)) {
     ctx.redirect('/?error=' + encodeURIComponent('تعداد تلاش بیش از حد — لطفاً ۵ دقیقه صبر کنید'));
     return;
   }
   const b = ctx.body || {};
   const user = db.findByUsername(b.username);
-  if (!user || user.role !== 'coach' || db.get('SELECT user_id FROM academy_admins WHERE user_id=?',user.id) || !db.verifyPassword(b.password, user.password_hash, user.password_salt)) {
+  if (!user || user.role !== 'coach' || db.get('SELECT user_id FROM academy_admins WHERE user_id=?', user.id) || !db.verifyPassword(b.password, user.password_hash, user.password_salt)) {
     ctx.redirect('/?error=' + encodeURIComponent('نام کاربری یا رمز عبور اشتباه است'));
     return;
   }
@@ -210,7 +219,9 @@ app.post('/api/api-keys', (ctx) => {
 app.delete('/api/api-keys/:id', (ctx) => {
   const u = coach(ctx);
   if (!u) return ctx.json({ ok: false, error: 'unauthorized' }, 401);
-  db.deleteApiKey(ctx.params.id, u.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه نامعتبر است');
+  db.deleteApiKey(id, u.id);
   ctx.json({ ok: true });
 });
 
@@ -225,11 +236,11 @@ app.put('/api/me', (ctx) => {
   if (!u) return;
   const b = ctx.body || {};
   const updated = db.updateUser(u.id, {
-    full_name: b.full_name,
-    phone: b.phone,
-    belt: b.belt,
-    notes: b.notes,
-    style: b.style
+    full_name: b.full_name !== undefined ? sanitize(String(b.full_name), 120) : undefined,
+    phone: b.phone !== undefined ? sanitize(String(b.phone), 20) : undefined,
+    belt: b.belt !== undefined ? sanitize(String(b.belt), 40) : undefined,
+    notes: b.notes !== undefined ? sanitize(String(b.notes), 1000) : undefined,
+    style: b.style !== undefined ? sanitize(String(b.style), 60) : undefined
   });
   ctx.json({ ok: true, user: db.publicUser(updated) });
 });
@@ -237,6 +248,9 @@ app.put('/api/me', (ctx) => {
 app.post('/api/password', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
+  if (!rateLimit('pass-coach:' + u.id + ':' + getClientIp(ctx.req), 8, 600000)) {
+    return bad(ctx, 'تعداد تلاش تغییر رمز بیش از حد است؛ ۱۰ دقیقه صبر کنید', 429);
+  }
   const { current, next } = ctx.body || {};
   if (!db.verifyPassword(current, u.password_hash, u.password_salt)) return bad(ctx, 'رمز فعلی درست نیست');
   if (!next || String(next).length < 6) return bad(ctx, 'رمز جدید باید حداقل ۶ حرف باشد');
@@ -252,7 +266,7 @@ app.get('/api/overview', (ctx) => {
   if (!u) return;
   const j = todayJalali();
   const doneFeed = db.all(
-    `SELECT pa.*, u.full_name, u.avatar_color, (u.avatar_photo IS NOT NULL AND u.avatar_photo != '') AS has_photo, u.avatar_updated_at AS photo_updated_at, u.belt, p.title AS plan_title
+    `SELECT pa.*, u.full_name, u.avatar_color, (u.avatar_key IS NOT NULL OR (u.avatar_photo IS NOT NULL AND u.avatar_photo != '')) AS has_photo, u.avatar_updated_at AS photo_updated_at, u.belt, p.title AS plan_title
      FROM plan_assignments pa JOIN users u ON u.id = pa.user_id JOIN plans p ON p.id = pa.plan_id
      WHERE pa.verified=1 AND p.verified=1 AND u.verified=1 AND pa.status = 'done' ORDER BY pa.completed_at DESC LIMIT 8`
   );
@@ -261,9 +275,10 @@ app.get('/api/overview', (ctx) => {
      WHERE sr.verified=1 AND u.verified=1 ORDER BY sr.created_at DESC LIMIT 8`
   );
   const latestMembers = db.all(
-    "SELECT id, full_name, username, belt, avatar_color, (avatar_photo IS NOT NULL AND avatar_photo != '') AS has_photo, avatar_updated_at AS photo_updated_at, last_seen_at, join_date, created_at FROM users WHERE verified=1 AND role='member' ORDER BY created_at DESC LIMIT 5"
+    "SELECT id, full_name, username, belt, avatar_color, (avatar_key IS NOT NULL OR (avatar_photo IS NOT NULL AND avatar_photo != '')) AS has_photo, avatar_updated_at AS photo_updated_at, last_seen_at, join_date, created_at FROM users WHERE verified=1 AND role='member' ORDER BY created_at DESC LIMIT 5"
   ).map((m) => ({
     ...m,
+    has_photo: !!m.has_photo,
     is_online: db.isUserOnline(m.last_seen_at)
   }));
   const pendingReceipts = db.get(
@@ -280,7 +295,7 @@ app.get('/api/overview', (ctx) => {
       discipline: m.discipline || m.style || '',
       belt: m.belt || '',
       avatar_color: m.avatar_color,
-      has_photo: !!m.avatar_photo,
+      has_photo: !!(m.avatar_key || m.avatar_photo),
       photo_updated_at: m.avatar_updated_at || null,
       last_seen_at: m.last_seen_at || null,
       is_online: db.isUserOnline(m.last_seen_at),
@@ -358,14 +373,23 @@ app.post('/api/members', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
   const b = ctx.body || {};
-  if (!b.full_name || !String(b.full_name).trim()) return bad(ctx, 'نام و نام خانوادگی الزامی است');
-  if (!b.username || !/^[a-zA-Z0-9._-]{3,}$/.test(String(b.username).trim())) {
+  const fullName = sanitize(String(b.full_name || ''), 120);
+  const username = String(b.username || '').trim().toLowerCase();
+  if (!fullName) return bad(ctx, 'نام و نام خانوادگی الزامی است');
+  if (!username || !/^[a-zA-Z0-9._-]{3,30}$/.test(username)) {
     return bad(ctx, 'نام کاربری باید انگلیسی و حداقل ۳ حرف باشد');
   }
-  if (db.findByUsername(b.username)) return bad(ctx, 'این نام کاربری قبلاً گرفته شده است');
+  if (db.findByUsername(username)) return bad(ctx, 'این نام کاربری قبلاً گرفته شده است');
   const password = b.password;
   if (!password || String(password).length < 4) return bad(ctx, 'رمز عبور باید حداقل ۴ حرف باشد');
-  const member = db.createUser({ ...b, username: String(b.username).trim().toLowerCase(), password }, 'member');
+  const member = db.createUser({
+    ...b,
+    full_name: fullName,
+    username,
+    password,
+    notes: b.notes !== undefined ? sanitize(String(b.notes), 1000) : undefined,
+    experience: b.experience !== undefined ? sanitize(String(b.experience), 160) : undefined
+  }, 'member');
   db.logActivity(u.id, u.full_name, 'شاگرد جدید ثبت کرد', member.full_name);
 
   // اگر تمرین‌های «برای همه» فعال باشند، به او هم اختصاص بده
@@ -383,7 +407,9 @@ app.post('/api/members', (ctx) => {
 
 app.get('/api/members/:id', (ctx) => {
   if (!needCoach(ctx)) return;
-  const m = db.findById(ctx.params.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه شاگرد نامعتبر است');
+  const m = db.findById(id);
   if (!m || m.role !== 'member') return bad(ctx, 'شاگرد پیدا نشد', 404);
   const years = db.all('SELECT DISTINCT year FROM progress WHERE verified=1 ORDER BY year DESC').map((r) => r.year);
   const year = Number(ctx.query.year) || todayJalali().jy;
@@ -407,27 +433,39 @@ app.get('/api/members/:id', (ctx) => {
 
 app.get('/api/members/:id/insurance', (ctx) => {
   if (!needCoach(ctx)) return;
-  const m = db.findById(ctx.params.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه شاگرد نامعتبر است');
+  const m = db.findById(id);
   if (!m || m.role !== 'member') return bad(ctx, 'شاگرد پیدا نشد', 404);
   const ins = db.getUserInsurance(m.id);
-  ctx.json({ ok: true, ...(ins || { has_insurance: false, file_data: null, file_name: null, updated_at: null }) });
+  ctx.json({ ok: true, ...(ins || { has_insurance: false, file_data: null, file_name: null, storage_url: null, updated_at: null }) });
 });
 
 app.get('/api/members/:id/photo', (ctx) => {
   if (!needCoach(ctx)) return;
-  const m = db.findById(ctx.params.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه شاگرد نامعتبر است');
+  const m = db.findById(id);
   if (!m || m.role !== 'member') return bad(ctx, 'شاگرد پیدا نشد', 404);
   const photo = db.getUserPhoto(m.id);
-  if (!photo || !photo.photo_data) return bad(ctx, 'عکس پروفایل ثبت نشده است', 404);
+  if (!photo || (!photo.buffer && !photo.photo_data)) return bad(ctx, 'عکس پروفایل ثبت نشده است', 404);
+  if (photo.buffer) return ctx.binary(photo.buffer, photo.mime, { etag: photo.etag });
   ctx.image(photo.photo_data);
 });
 
 app.put('/api/members/:id', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
-  const m = db.findById(ctx.params.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه شاگرد نامعتبر است');
+  const m = db.findById(id);
   if (!m || m.role !== 'member') return bad(ctx, 'شاگرد پیدا نشد', 404);
-  const updated = db.updateUser(m.id, ctx.body || {});
+  const b = ctx.body || {};
+  const patch = { ...b };
+  if (patch.full_name !== undefined) patch.full_name = sanitize(String(patch.full_name), 120);
+  if (patch.notes !== undefined && patch.notes !== null) patch.notes = sanitize(String(patch.notes), 1000);
+  if (patch.experience !== undefined && patch.experience !== null) patch.experience = sanitize(String(patch.experience), 160);
+  const updated = db.updateUser(m.id, patch);
   db.logActivity(u.id, u.full_name, 'اطلاعات شاگرد را ویرایش کرد', updated.full_name);
   ctx.json({ ok: true, member: db.publicUser(updated) });
 });
@@ -435,7 +473,10 @@ app.put('/api/members/:id', (ctx) => {
 app.post('/api/members/:id/password', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
-  const m = db.findById(ctx.params.id);
+  if (!rateLimit('reset-pw:' + u.id, 30, 300000)) return bad(ctx, 'تعداد درخواست بیش از حد است', 429);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه شاگرد نامعتبر است');
+  const m = db.findById(id);
   if (!m || m.role !== 'member') return bad(ctx, 'شاگرد پیدا نشد', 404);
   const next = (ctx.body || {}).password;
   if (!next || String(next).length < 4) return bad(ctx, 'رمز عبور باید حداقل ۴ حرف باشد');
@@ -447,10 +488,12 @@ app.post('/api/members/:id/password', (ctx) => {
 app.delete('/api/members/:id', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
-  const m = db.findById(ctx.params.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه شاگرد نامعتبر است');
+  const m = db.findById(id);
   if (!m || m.role !== 'member') return bad(ctx, 'شاگرد پیدا نشد', 404);
-  if (db.get('SELECT record_id FROM academy_record_people WHERE user_id=? LIMIT 1', m.id) || db.get('SELECT id FROM academy_records WHERE user_id=? OR author_id=? LIMIT 1',m.id,m.id)) return bad(ctx,'برای حفظ سوابق، حساب را غیرفعال کنید؛ این فرد سابقهٔ آکادمی دارد',409);
-  db.run('DELETE FROM users WHERE id = ?', m.id);
+  if (db.get('SELECT record_id FROM academy_record_people WHERE user_id=? LIMIT 1', m.id) || db.get('SELECT id FROM academy_records WHERE user_id=? OR author_id=? LIMIT 1', m.id, m.id)) return bad(ctx, 'برای حفظ سوابق، حساب را غیرفعال کنید؛ این فرد سابقهٔ آکادمی دارد', 409);
+  db.deleteUser(m.id);
   db.logActivity(u.id, u.full_name, 'شاگرد را حذف کرد', m.full_name);
   ctx.json({ ok: true });
 });
@@ -458,8 +501,11 @@ app.delete('/api/members/:id', (ctx) => {
 app.post('/api/members/:id/impersonate', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
-  const m = db.findById(ctx.params.id);
-  if (!m || m.role !== 'member') return bad(ctx, 'شاگرد پیدا نشد', 404);
+  if (!rateLimit('impersonate:' + u.id, 30, 300000)) return bad(ctx, 'تعداد درخواست بیش از حد است', 429);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه شاگرد نامعتبر است');
+  const m = db.findById(id);
+  if (!m || m.role !== 'member' || !m.active) return bad(ctx, 'شاگرد پیدا نشد', 404);
   const token = require('node:crypto').randomBytes(24).toString('hex');
   db.run('INSERT INTO impersonations (token, user_id, created_at) VALUES (?,?,?)', token, m.id, db.now());
   db.logActivity(u.id, u.full_name, 'پنل شاگرد را مشاهده کرد', m.full_name);
@@ -469,7 +515,9 @@ app.post('/api/members/:id/impersonate', (ctx) => {
 app.post('/api/members/:id/remind', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
-  const m = db.findById(ctx.params.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه شاگرد نامعتبر است');
+  const m = db.findById(id);
   if (!m || m.role !== 'member') return bad(ctx, 'شاگرد پیدا نشد', 404);
   const b = ctx.body || {};
   const kind = ['tuition', 'absence', 'custom'].includes(b.kind) ? b.kind : 'tuition';
@@ -518,7 +566,7 @@ app.get('/api/attendance', (ctx) => {
       discipline: m.discipline || m.style || '',
       belt: m.belt || '',
       avatar_color: m.avatar_color,
-      has_photo: !!m.avatar_photo,
+      has_photo: !!(m.avatar_key || m.avatar_photo),
       photo_updated_at: m.avatar_updated_at || null,
       last_seen_at: m.last_seen_at || null,
       is_online: db.isUserOnline(m.last_seen_at),
@@ -546,13 +594,15 @@ app.post('/api/attendance', (ctx) => {
 
   const saved = [];
   for (const item of entries) {
-    const m = db.findById(item.user_id);
+    const uid = parseId(item && item.user_id);
+    if (!uid) continue;
+    const m = db.findById(uid);
     if (!m || m.role !== 'member') continue;
     const rec = db.recordAttendance({
       user_id: m.id,
       session_date,
       status: item.status,
-      note: item.note ? sanitize(String(item.note)).slice(0, 300) : null
+      note: item.note ? sanitize(String(item.note), 300) : null
     }, u.id);
     saved.push(rec);
   }
@@ -571,14 +621,27 @@ app.get('/api/tuition/receipts', (ctx) => {
   ctx.json({ ok: true, receipts, pendingCount });
 });
 
+app.get('/api/tuition/receipts/:id/image', (ctx) => {
+  if (!needCoach(ctx)) return;
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه فیش نامعتبر است');
+  const item = db.getTuitionReceiptImage(id);
+  if (!item) return bad(ctx, 'فیش پیدا نشد', 404);
+  if (item.buffer) return ctx.binary(item.buffer, item.mime, { etag: item.etag });
+  if (item.dataUrl) return ctx.image(item.dataUrl);
+  return bad(ctx, 'تصویر فیش ثبت نشده است', 404);
+});
+
 app.post('/api/tuition/receipts/:id/review', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه فیش نامعتبر است');
   const b = ctx.body || {};
   const status = b.status;
   if (!['approved', 'rejected'].includes(status)) return bad(ctx, 'وضعیت بررسی باید تایید یا رد باشد');
-  const coach_note = b.coach_note ? sanitize(String(b.coach_note).trim()).slice(0, 500) : '';
-  const updated = db.reviewTuitionReceipt(ctx.params.id, { status, coach_note }, u.id);
+  const coach_note = b.coach_note ? sanitize(String(b.coach_note).trim(), 500) : '';
+  const updated = db.reviewTuitionReceipt(id, { status, coach_note }, u.id);
   if (!updated) return bad(ctx, 'فیش مورد نظر پیدا نشد', 404);
 
   const member = db.findById(updated.user_id);
@@ -603,22 +666,23 @@ app.post('/api/plans', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
   const b = ctx.body || {};
-  if (!b.title || !String(b.title).trim()) return bad(ctx, 'عنوان تمرین الزامی است');
-  let targets = (b.member_ids || []).map(Number).filter((n) => !Number.isNaN(n));
+  const title = sanitize(String(b.title || ''), 160);
+  if (!title) return bad(ctx, 'عنوان تمرین الزامی است');
+  let targets = Array.isArray(b.member_ids) ? b.member_ids.map(parseId).filter(Boolean) : [];
   if (!targets.length && !b.all_members) return bad(ctx, 'حداقل یک شاگرد را انتخاب کنید');
   if (b.all_members) targets = [];
   const plan = db.createPlan({
     author_id: u.id,
-    title: String(b.title).trim(),
-    body: b.body,
-    category: b.category,
-    difficulty: b.difficulty,
+    title,
+    body: b.body ? sanitize(String(b.body), 4000) : '',
+    category: b.category ? sanitize(String(b.category), 50) : 'تمرین',
+    difficulty: b.difficulty ? sanitize(String(b.difficulty), 30) : 'متوسط',
     starts_on: b.starts_on,
     due_on: b.due_on,
-    duration: b.duration,
+    duration: b.duration ? sanitize(String(b.duration), 60) : null,
     targets,
     all_members: !!b.all_members,
-    sport: b.sport || null
+    sport: b.sport ? sanitize(String(b.sport), 60) : null
   });
   db.logActivity(u.id, u.full_name, 'تمرین ارسال کرد', `${plan.title} — ${plan.total} شاگرد`);
   ctx.json({ ok: true, plan });
@@ -626,7 +690,9 @@ app.post('/api/plans', (ctx) => {
 
 app.get('/api/plans/:id', (ctx) => {
   if (!needCoach(ctx)) return;
-  const plan = db.getPlan(ctx.params.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه تمرین نامعتبر است');
+  const plan = db.getPlan(id);
   if (!plan) return bad(ctx, 'تمرین پیدا نشد', 404);
   ctx.json({ ok: true, plan });
 });
@@ -634,9 +700,20 @@ app.get('/api/plans/:id', (ctx) => {
 app.put('/api/plans/:id', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
-  const plan = db.getPlan(ctx.params.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه تمرین نامعتبر است');
+  const plan = db.getPlan(id);
   if (!plan) return bad(ctx, 'تمرین پیدا نشد', 404);
-  const updated = db.updatePlan(plan.id, ctx.body || {});
+  const b = ctx.body || {};
+  const patch = {};
+  if (b.title !== undefined) patch.title = sanitize(String(b.title), 160);
+  if (b.body !== undefined) patch.body = sanitize(String(b.body), 4000);
+  if (b.category !== undefined) patch.category = sanitize(String(b.category), 50);
+  if (b.difficulty !== undefined) patch.difficulty = sanitize(String(b.difficulty), 30);
+  if (b.starts_on !== undefined) patch.starts_on = b.starts_on;
+  if (b.due_on !== undefined) patch.due_on = b.due_on;
+  if (b.duration !== undefined) patch.duration = sanitize(String(b.duration), 60);
+  const updated = db.updatePlan(plan.id, patch);
   db.logActivity(u.id, u.full_name, 'تمرین را ویرایش کرد', updated.title);
   ctx.json({ ok: true, plan: updated });
 });
@@ -644,7 +721,9 @@ app.put('/api/plans/:id', (ctx) => {
 app.delete('/api/plans/:id', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
-  const plan = db.getPlan(ctx.params.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه تمرین نامعتبر است');
+  const plan = db.getPlan(id);
   if (!plan) return bad(ctx, 'تمرین پیدا نشد', 404);
   db.deletePlan(plan.id);
   db.logActivity(u.id, u.full_name, 'تمرین را حذف کرد', plan.title);
@@ -654,16 +733,18 @@ app.delete('/api/plans/:id', (ctx) => {
 app.post('/api/plans/:id/assign', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
-  const plan = db.getPlan(ctx.params.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه تمرین نامعتبر است');
+  const plan = db.getPlan(id);
   if (!plan) return bad(ctx, 'تمرین پیدا نشد', 404);
-  const ids = (ctx.body || {}).member_ids || [];
-  for (const id of ids) {
-    const m = db.findById(id);
-    if (!m) continue;
+  const ids = Array.isArray((ctx.body || {}).member_ids) ? ctx.body.member_ids.map(parseId).filter(Boolean) : [];
+  for (const uid of ids) {
+    const m = db.findById(uid);
+    if (!m || m.role !== 'member') continue;
     const added = db.run('INSERT OR IGNORE INTO plan_assignments (plan_id, user_id, status, assigned_at) VALUES (?,?,?,?)',
-      plan.id, Number(id), 'todo', db.now());
+      plan.id, uid, 'todo', db.now());
     if (added.changes > 0) {
-      db.pushNotification(id, { type: 'plan', title: `تمرین جدید: ${plan.title}`, body: 'به پنل تمرینات من سر بزنید.' });
+      db.pushNotification(uid, { type: 'plan', title: `تمرین جدید: ${plan.title}`, body: 'به پنل تمرینات من سر بزنید.' });
     }
   }
   db.logActivity(u.id, u.full_name, 'تمرین را برای شاگردان بیشتری ارسال کرد', `${plan.title} — ${ids.length} نفر`);
@@ -673,24 +754,27 @@ app.post('/api/plans/:id/assign', (ctx) => {
 app.put('/api/assignments/:id', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
-  const a = db.get('SELECT * FROM plan_assignments WHERE id = ?', ctx.params.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه تخصیص نامعتبر است');
+  const a = db.get('SELECT * FROM plan_assignments WHERE id = ?', id);
   if (!a) return bad(ctx, 'تخصیص پیدا نشد', 404);
   const { status, coach_note } = ctx.body || {};
+  const cleanNote = coach_note === undefined ? undefined : (coach_note === null ? '' : sanitize(String(coach_note), 1000));
   const fields = [];
   const values = [];
   if (status && ['todo', 'doing', 'done'].includes(status)) { fields.push('status = ?'); values.push(status); }
-  if (coach_note !== undefined) { fields.push('coach_note = ?'); values.push(coach_note); }
+  if (cleanNote !== undefined) { fields.push('coach_note = ?'); values.push(cleanNote); }
   if (fields.length) {
     values.push(a.id);
     db.run(`UPDATE plan_assignments SET ${fields.join(', ')} WHERE id = ?`, ...values);
   }
-  if (coach_note) {
+  if (cleanNote) {
     const m = db.findById(a.user_id);
     const p = db.get('SELECT title FROM plans WHERE id = ?', a.plan_id);
     db.pushNotification(a.user_id, {
       type: 'feedback',
       title: 'بازخورد مربی',
-      body: `${p ? p.title : 'تمرین'}: ${coach_note}`
+      body: `${p ? p.title : 'تمرین'}: ${cleanNote}`
     });
     db.logActivity(u.id, u.full_name, 'به تمرین شاگرد بازخورد داد', m ? m.full_name : null);
   }
@@ -701,7 +785,8 @@ app.put('/api/assignments/:id', (ctx) => {
 
 app.get('/api/progress', (ctx) => {
   if (!needCoach(ctx)) return;
-  const userId = Number(ctx.query.user_id);
+  const userId = parseId(ctx.query.user_id);
+  if (!userId) return bad(ctx, 'شناسه شاگرد معتبر نیست');
   const m = db.findById(userId);
   if (!m || m.role !== 'member') return bad(ctx, 'شاگرد پیدا نشد', 404);
   const year = Number(ctx.query.year) || todayJalali().jy;
@@ -714,11 +799,13 @@ app.put('/api/progress', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
   const b = ctx.body || {};
-  const m = db.findById(b.user_id);
+  const userId = parseId(b.user_id);
+  const m = userId ? db.findById(userId) : null;
   if (!m || m.role !== 'member') return bad(ctx, 'شاگرد پیدا نشد', 404);
   const year = Number(b.year);
   const month = Number(b.month);
   if (!year || !month || month < 1 || month > 12) return bad(ctx, 'سال و ماه معتبر وارد کنید');
+  const cleanNote = b.note === undefined ? undefined : (b.note === null ? null : sanitize(String(b.note), 1000));
   const row = db.saveProgress({
     user_id: m.id, year, month,
     sessions: b.sessions,
@@ -729,7 +816,7 @@ app.put('/api/progress', (ctx) => {
     discipline: clampScore(b.discipline),
     weight_kg: numOrNull(b.weight_kg),
     overall: clampScore(b.overall),
-    note: b.note === undefined ? undefined : b.note
+    note: cleanNote
   }, u.id);
   db.pushNotification(m.id, {
     type: 'progress',
@@ -743,7 +830,9 @@ app.put('/api/progress', (ctx) => {
 app.delete('/api/progress/:id', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
-  const row = db.get('SELECT * FROM progress WHERE id = ?', ctx.params.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه رکورد نامعتبر است');
+  const row = db.get('SELECT * FROM progress WHERE id = ?', id);
   if (!row) return bad(ctx, 'رکورد پیدا نشد', 404);
   db.deleteProgress(row.id);
   db.logActivity(u.id, u.full_name, 'یک رکورد پیشرفت را حذف کرد', null);
@@ -890,18 +979,20 @@ app.post('/api/announcements', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
   const b = ctx.body || {};
-  if (!b.title || !String(b.title).trim()) return bad(ctx, 'عنوان اطلاعیه الزامی است');
-  if (!b.body || !String(b.body).trim()) return bad(ctx, 'متن اطلاعیه الزامی است');
-  const targets = (b.member_ids || []).map(Number).filter(Boolean);
+  const title = sanitize(String(b.title || ''), 180);
+  const body = sanitize(String(b.body || ''), 4000);
+  if (!title) return bad(ctx, 'عنوان اطلاعیه الزامی است');
+  if (!body) return bad(ctx, 'متن اطلاعیه الزامی است');
+  const targets = Array.isArray(b.member_ids) ? b.member_ids.map(parseId).filter(Boolean) : [];
+  if (!targets.length && !b.all_members) return bad(ctx, 'حداقل یک شاگرد را انتخاب کنید');
   const a = db.createAnnouncement({
     author_id: u.id,
-    title: String(b.title).trim(),
-    body: String(b.body),
-    category: b.category || 'عمومی',
+    title,
+    body,
+    category: b.category ? sanitize(String(b.category), 50) : 'عمومی',
     pinned: b.pinned ? 1 : 0,
     targets: b.all_members ? [] : targets
   });
-  if (!a.targets.length && !b.all_members) return bad(ctx, 'حداقل یک شاگرد را انتخاب کنید');
   db.logActivity(u.id, u.full_name, 'اطلاعیه منتشر کرد', a.title);
   ctx.json({ ok: true, announcement: a });
 });
@@ -909,12 +1000,17 @@ app.post('/api/announcements', (ctx) => {
 app.put('/api/announcements/:id', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
-  const a = db.getAnnouncement(ctx.params.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه اطلاعیه نامعتبر است');
+  const a = db.getAnnouncement(id);
   if (!a) return bad(ctx, 'اطلاعیه پیدا نشد', 404);
   const b = ctx.body || {};
   const patch = {};
-  for (const k of ['title', 'body', 'category', 'pinned']) if (b[k] !== undefined) patch[k] = b[k];
-  if (b.member_ids !== undefined) patch.targets = (b.member_ids || []).map(Number).filter(Boolean);
+  if (b.title !== undefined) patch.title = sanitize(String(b.title), 180);
+  if (b.body !== undefined) patch.body = sanitize(String(b.body), 4000);
+  if (b.category !== undefined) patch.category = sanitize(String(b.category), 50);
+  if (b.pinned !== undefined) patch.pinned = b.pinned ? 1 : 0;
+  if (b.member_ids !== undefined) patch.targets = Array.isArray(b.member_ids) ? b.member_ids.map(parseId).filter(Boolean) : [];
   const updated = db.updateAnnouncement(a.id, patch);
   db.logActivity(u.id, u.full_name, 'اطلاعیه را ویرایش کرد', updated.title);
   ctx.json({ ok: true, announcement: updated });
@@ -923,7 +1019,9 @@ app.put('/api/announcements/:id', (ctx) => {
 app.delete('/api/announcements/:id', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
-  const a = db.getAnnouncement(ctx.params.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه اطلاعیه نامعتبر است');
+  const a = db.getAnnouncement(id);
   if (!a) return bad(ctx, 'اطلاعیه پیدا نشد', 404);
   db.deleteAnnouncement(a.id);
   db.logActivity(u.id, u.full_name, 'اطلاعیه را حذف کرد', a.title);
@@ -934,13 +1032,14 @@ app.post('/api/messages', (ctx) => {
   const u = needCoach(ctx);
   if (!u) return;
   const b = ctx.body || {};
-  const title = String(b.title || '').trim();
+  const title = sanitize(String(b.title || '').trim(), 160);
   if (!title) return bad(ctx, 'عنوان پیام الزامی است');
-  let ids = (b.member_ids || []).map(Number).filter(Boolean);
+  const body = b.body ? sanitize(String(b.body), 1000) : null;
+  let ids = Array.isArray(b.member_ids) ? b.member_ids.map(parseId).filter(Boolean) : [];
   if (b.all_members) ids = db.listMembers({ active: 1 }).map((m) => m.id);
   if (!ids.length) return bad(ctx, 'گیرنده‌ای انتخاب نشده است');
   for (const id of ids) {
-    db.pushNotification(id, { type: 'message', title, body: b.body || null });
+    db.pushNotification(id, { type: 'message', title, body });
   }
   db.logActivity(u.id, u.full_name, 'پیام مستقیم فرستاد', `${title} — ${ids.length} نفر`);
   ctx.json({ ok: true, sent: ids.length });
@@ -983,8 +1082,10 @@ app.get('/v1/stats', (ctx) => {
 app.get('/v1/progress/:userId', (ctx) => {
   const u = coachOrApiKey(ctx);
   if (!u) return ctx.json({ ok: false, error: 'unauthorized' }, 401);
+  const uid = parseId(ctx.params.userId);
+  if (!uid) return bad(ctx, 'شناسه شاگرد نامعتبر است');
   const year = Number(ctx.query.year) || todayJalali().jy;
-  const prog = db.progressYear(Number(ctx.params.userId), year);
+  const prog = db.progressYear(uid, year);
   ctx.json({ ok: true, progress: prog });
 });
 

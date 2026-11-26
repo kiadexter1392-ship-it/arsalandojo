@@ -1016,8 +1016,8 @@
             title: 'فایل بیمه ورزشی',
             wide: true,
             body: isPdf
-              ? `<div class="stack" style="gap:12px"><p class="small">فایل PDF ثبت‌شده: <b>${esc(ins.file_name || 'insurance.pdf')}</b></p><a href="${ins.file_data}" download="${esc(ins.file_name || 'insurance.pdf')}" class="btn primary">دانلود / باز کردن فایل PDF</a></div>`
-              : `<div style="text-align:center"><img src="${ins.file_data}" alt="بیمه ورزشی" style="max-width:100%;max-height:70vh;border-radius:12px"></div>`,
+              ? `<div class="stack" style="gap:12px"><p class="small">فایل PDF ثبت‌شده: <b>${esc(ins.file_name || 'insurance.pdf')}</b></p><a href="${esc(ins.file_data)}" download="${esc(ins.file_name || 'insurance.pdf')}" class="btn primary">دانلود / باز کردن فایل PDF</a></div>`
+              : `<div style="text-align:center"><img src="${esc(ins.file_data)}" decoding="async" alt="بیمه ورزشی" style="max-width:100%;max-height:70vh;border-radius:12px"></div>`,
             actions: [{ label: 'بستن', class: 'ghost', onClick: closeModal }]
           });
         } catch (err) {

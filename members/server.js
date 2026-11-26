@@ -7,8 +7,9 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const { readPorts } = require('../shared/ports');
-const { createServer, rateLimit, sanitize } = require('../shared/server');
+const { createServer, rateLimit, sanitize, getClientIp, parseId } = require('../shared/server');
 const db = require('../shared/db');
+const storage = require('../shared/storage');
 const authSession = require('../shared/auth-session');
 const { seedIfEmpty, DEMO } = require('../shared/seed');
 const { JALALI_MONTHS, todayJalali, formatJalali, faNum, enNum } = require('../shared/jalali');
@@ -81,15 +82,20 @@ app.get('/panel', (ctx) => {
   serveMemberHtml(ctx, 'panel.html');
 });
 
+app.get('/healthz', (ctx) => {
+  ctx.json({ ok: true, site: SITE, storageSeparate: true });
+});
+
 /* ورود مربی به پنل یک شاگرد (از سایت اول) */
 app.get('/impersonate', (ctx) => {
-  const token = ctx.query.token;
+  const token = String(ctx.query.token || '').trim();
   const row = token ? db.get('SELECT * FROM impersonations WHERE token = ?', token) : null;
   if (!row || row.used_at) return ctx.redirect('/?error=bad-token');
   if (Date.now() - new Date(row.created_at).getTime() > 5 * 60 * 1000) return ctx.redirect('/?error=expired');
   const u = db.findById(row.user_id);
-  if (!u) return ctx.redirect('/?error=bad-token');
-  db.run('UPDATE impersonations SET used_at = ? WHERE token = ?', db.now(), token);
+  if (!u || u.role !== 'member' || !u.active) return ctx.redirect('/?error=bad-token');
+  const claim = db.run('UPDATE impersonations SET used_at = ? WHERE token = ? AND used_at IS NULL', db.now(), token);
+  if (!claim || Number(claim.changes) !== 1) return ctx.redirect('/?error=bad-token');
   const { token: sessionToken } = db.createSession(u.id, SITE, 1);
   db.run('UPDATE sessions SET impersonated=1 WHERE token=?', sessionToken);
   ctx.setCookie(sessionToken, { maxAgeSeconds: 86400 }); /* 1 day for coach impersonation */
@@ -100,7 +106,7 @@ app.get('/api/config', (ctx) => {
   const j = todayJalali();
   ctx.json({
     ok: true,
-    features: { academy: 'v1', independentAdmin: true, sampleData: false },
+    features: { academy: 'v1', independentAdmin: true, sampleData: false, isolatedStorage: true },
     release: process.env.RAILWAY_GIT_COMMIT_SHA || 'local',
     site: 'member',
     club: 'باشگاه آنلاین ارسلان دوجو',
@@ -257,17 +263,17 @@ function doRegister(ctx, b) {
     username,
     email,
     password,
-    phone: b.phone || null,
-    gender: b.gender || null,
+    phone: b.phone ? sanitize(String(b.phone), 20) : null,
+    gender: b.gender ? sanitize(String(b.gender), 20) : null,
     birth_date: b.birth_date || null,
-    blood_group: b.blood_group || null,
+    blood_group: b.blood_group ? sanitize(String(b.blood_group), 10) : null,
     age: b.age,
     weight_kg: b.weight_kg,
     height_cm: b.height_cm,
-    belt: b.belt || 'سفید',
-    discipline: b.discipline || b.style || null,
-    style: b.discipline || b.style || null,
-    experience: b.experience || null,
+    belt: b.belt ? sanitize(String(b.belt), 40) : 'سفید',
+    discipline: b.discipline || b.style ? sanitize(String(b.discipline || b.style), 60) : null,
+    style: b.discipline || b.style ? sanitize(String(b.discipline || b.style), 60) : null,
+    experience: b.experience ? sanitize(String(b.experience), 160) : null,
     join_date: new Date().toISOString().slice(0, 10)
   }, 'member');
 
@@ -295,6 +301,10 @@ function doRegister(ctx, b) {
 }
 
 app.post('/api/register', (ctx) => {
+  const ip = getClientIp(ctx.req);
+  if (!rateLimit('reg-api:' + ip, 12, 600000)) {
+    return bad(ctx, 'تعداد ثبت‌نام بیش از حد — لطفاً ۱۰ دقیقه صبر کنید', 429);
+  }
   const b = ctx.body || {};
   const err = doRegister(ctx, b);
   if (err) return bad(ctx, err);
@@ -303,7 +313,7 @@ app.post('/api/register', (ctx) => {
 
 /* ثبت‌نام مستقیم (فرم HTML → ریدایرکت) — مرورگر خودش کوکی رو مدیریت می‌کنه */
 app.post('/register', (ctx) => {
-  const ip = ctx.req.headers['x-forwarded-for'] || ctx.req.socket.remoteAddress || '';
+  const ip = getClientIp(ctx.req);
   if (!rateLimit('reg:' + ip, 5, 600000)) {
     ctx.redirect('/?error=' + encodeURIComponent('تعداد ثبت‌نام بیش از حد — لطفاً ۱۰ دقیقه صبر کنید'));
     return;
@@ -318,7 +328,7 @@ app.post('/register', (ctx) => {
 });
 
 app.post('/login', (ctx) => {
-  const ip = ctx.req.headers['x-forwarded-for'] || ctx.req.socket.remoteAddress || '';
+  const ip = getClientIp(ctx.req);
   if (!rateLimit('login:' + ip, 10, 300000)) {
     ctx.redirect('/?error=' + encodeURIComponent('تعداد تلاش بیش از حد — لطفاً ۵ دقیقه صبر کنید'));
     return;
@@ -340,6 +350,10 @@ app.post('/login', (ctx) => {
 });
 
 app.post('/api/login', (ctx) => {
+  const ip = getClientIp(ctx.req);
+  if (!rateLimit('login-api:' + ip, 12, 300000)) {
+    return bad(ctx, 'تعداد تلاش بیش از حد — لطفاً ۵ دقیقه صبر کنید', 429);
+  }
   const { username, password } = ctx.body || {};
   const u = db.findByUsername(username);
   if (!u || u.role !== 'member' || !db.verifyPassword(password, u.password_hash, u.password_salt)) {
@@ -353,7 +367,7 @@ app.post('/api/login', (ctx) => {
 });
 
 app.post('/api/auth/google', async (ctx) => {
-  const ip = ctx.req.headers['x-forwarded-for'] || ctx.req.socket.remoteAddress || '';
+  const ip = getClientIp(ctx.req);
   if (!rateLimit('google-auth:' + ip, 30, 300000)) {
     return bad(ctx, 'تعداد تلاش بیش از حد — لطفاً چند دقیقه صبر کنید', 429);
   }
@@ -430,18 +444,19 @@ app.put('/api/me', (ctx) => {
   const b = ctx.body || {};
   if (b.phone && !/^[0-9+\-\s]{7,15}$/.test(String(b.phone))) return bad(ctx, 'شماره موبایل معتبر نیست');
   const updated = db.updateUser(u.id, {
-    full_name: b.full_name,
+    full_name: b.full_name !== undefined ? sanitize(String(b.full_name), 120) : undefined,
     email: b.email,
-    phone: b.phone,
-    gender: b.gender,
+    phone: b.phone !== undefined ? sanitize(String(b.phone), 20) : undefined,
+    gender: b.gender !== undefined ? sanitize(String(b.gender), 20) : undefined,
     birth_date: b.birth_date,
-    blood_group: b.blood_group,
+    blood_group: b.blood_group !== undefined ? sanitize(String(b.blood_group), 10) : undefined,
     age: b.age,
     weight_kg: b.weight_kg,
     height_cm: b.height_cm,
-    belt: b.belt,
-    style: b.style,
-    experience: b.experience
+    belt: b.belt !== undefined ? sanitize(String(b.belt), 40) : undefined,
+    style: b.discipline !== undefined || b.style !== undefined ? sanitize(String(b.discipline || b.style), 60) : undefined,
+    discipline: b.discipline !== undefined ? sanitize(String(b.discipline), 60) : undefined,
+    experience: b.experience !== undefined ? sanitize(String(b.experience), 160) : undefined
   });
   ctx.json({ ok: true, user: db.publicUser(updated) });
 });
@@ -450,23 +465,29 @@ app.get('/api/me/insurance', (ctx) => {
   const u = needMember(ctx);
   if (!u) return;
   const ins = db.getUserInsurance(u.id);
-  ctx.json({ ok: true, ...(ins || { has_insurance: false, file_data: null, file_name: null, updated_at: null }) });
+  ctx.json({ ok: true, ...(ins || { has_insurance: false, file_data: null, file_name: null, storage_url: null, updated_at: null }) });
 });
 
 function saveInsuranceHandler(ctx) {
   const u = needMember(ctx);
   if (!u) return;
   if (u.impersonated) return bad(ctx, 'برای تغییر فایل بیمه ورزشی باید مستقیماً وارد حساب خود شوید', 403);
+  if (!rateLimit('ins-up:' + u.id, 15, 300000)) return bad(ctx, 'تعداد ارسال فایل بیش از حد است؛ کمی صبر کنید', 429);
   const b = ctx.body || {};
   const fileData = String(b.file_data || '').trim();
   if (!fileData) return bad(ctx, 'لطفاً یک فایل انتخاب کنید');
   if (fileData.length > 2500000) {
     return bad(ctx, 'حجم فایل بیمه نباید بیشتر از ۱.۸ مگابایت باشد');
   }
-  if (!/^data:(image\/(png|jpeg|jpg|webp)|application\/pdf);base64,[A-Za-z0-9+/=]+$/.test(fileData)) {
-    return bad(ctx, 'فرمت فایل مجاز نیست؛ فقط تصویر (PNG، JPG، WEBP) یا PDF مجاز است');
+  try {
+    storage.parseDataUrl(fileData, {
+      allowedMimes: ['image/png', 'image/jpeg', 'image/webp', 'application/pdf'],
+      maxBytes: 1850000
+    });
+  } catch (err) {
+    return bad(ctx, 'فرمت فایل مجاز نیست؛ فقط تصویر (PNG، JPG، WEBP) یا PDF معتبر مجاز است');
   }
-  const fileName = sanitize(String(b.file_name || 'insurance-card').trim()).slice(0, 120) || 'insurance-card';
+  const fileName = sanitize(String(b.file_name || 'insurance-card').trim(), 120) || 'insurance-card';
   const updated = db.setUserInsurance(u.id, { fileData, fileName });
   db.logActivity(u.id, u.full_name, 'فایل بیمه ورزشی ثبت کرد', fileName);
   ctx.json({ ok: true, user: db.publicUser(updated) });
@@ -487,7 +508,8 @@ app.get('/api/me/photo', (ctx) => {
   const u = needMember(ctx);
   if (!u) return;
   const photo = db.getUserPhoto(u.id);
-  if (!photo || !photo.photo_data) return bad(ctx, 'عکس پروفایل ثبت نشده است', 404);
+  if (!photo || (!photo.buffer && !photo.photo_data)) return bad(ctx, 'عکس پروفایل ثبت نشده است', 404);
+  if (photo.buffer) return ctx.binary(photo.buffer, photo.mime, { etag: photo.etag });
   ctx.image(photo.photo_data);
 });
 
@@ -495,14 +517,20 @@ function savePhotoHandler(ctx) {
   const u = needMember(ctx);
   if (!u) return;
   if (u.impersonated) return bad(ctx, 'برای تغییر عکس پروفایل باید مستقیماً وارد حساب خود شوید', 403);
+  if (!rateLimit('photo-up:' + u.id, 15, 300000)) return bad(ctx, 'تعداد تغییر عکس بیش از حد است؛ کمی صبر کنید', 429);
   const b = ctx.body || {};
   const photoData = String(b.photo_data || '').trim();
   if (!photoData) return bad(ctx, 'لطفاً یک تصویر انتخاب کنید');
   if (photoData.length > 1400000) {
     return bad(ctx, 'حجم عکس پروفایل نباید بیشتر از ۱ مگابایت باشد');
   }
-  if (!/^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/.test(photoData)) {
-    return bad(ctx, 'فرمت تصویر مجاز نیست؛ فقط PNG، JPG یا WEBP مجاز است');
+  try {
+    storage.parseDataUrl(photoData, {
+      allowedMimes: ['image/png', 'image/jpeg', 'image/webp'],
+      maxBytes: 1050000
+    });
+  } catch {
+    return bad(ctx, 'فرمت تصویر مجاز نیست؛ فقط PNG، JPG یا WEBP معتبر مجاز است');
   }
   const updated = db.setUserPhoto(u.id, photoData);
   db.logActivity(u.id, u.full_name, 'عکس پروفایل خود را ذخیره کرد', null);
@@ -523,6 +551,9 @@ app.delete('/api/me/photo', (ctx) => {
 app.post('/api/password', (ctx) => {
   const u = needMember(ctx);
   if (!u) return;
+  if (!rateLimit('pass-mem:' + u.id + ':' + getClientIp(ctx.req), 8, 600000)) {
+    return bad(ctx, 'تعداد تلاش تغییر رمز بیش از حد است؛ ۱۰ دقیقه صبر کنید', 429);
+  }
   const { current, next } = ctx.body || {};
   if (!db.verifyPassword(current, u.password_hash, u.password_salt)) return bad(ctx, 'رمز فعلی درست نیست');
   if (!next || String(next).length < 6) return bad(ctx, 'رمز جدید باید حداقل ۶ حرف باشد');
@@ -542,9 +573,12 @@ app.get('/api/plans', (ctx) => {
 app.put('/api/assignments/:id', (ctx) => {
   const u = needMember(ctx);
   if (!u) return;
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه تمرین نامعتبر است');
   const { status, note } = ctx.body || {};
   if (!['todo', 'doing', 'done'].includes(status)) return bad(ctx, 'وضعیت نامعتبر');
-  const a = db.setAssignmentStatus(ctx.params.id, u.id, status, note);
+  const cleanNote = note === undefined ? undefined : (note === null ? null : sanitize(String(note), 1000));
+  const a = db.setAssignmentStatus(id, u.id, status, cleanNote);
   if (!a) return bad(ctx, 'تمرین پیدا نشد', 404);
   ctx.json({ ok: true, assignment: a });
 });
@@ -576,11 +610,13 @@ app.post('/api/self-report', (ctx) => {
   if (!Number.isInteger(year) || year < 1200 || year > 1600 || !Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(sessions) || sessions < 0 || sessions > 31) {
     return bad(ctx, 'سال، ماه و تعداد جلسات معتبر را وارد کنید');
   }
+  const feeling = b.feeling ? sanitize(String(b.feeling), 40) : null;
+  const note = b.note ? sanitize(String(b.note), 1000) : null;
   const row = db.saveSelfReport({
     user_id: u.id, year, month,
     sessions,
-    feeling: b.feeling,
-    note: b.note
+    feeling,
+    note
   });
   ctx.json({ ok: true, report: row });
 });
@@ -596,7 +632,9 @@ app.get('/api/announcements', (ctx) => {
 app.post('/api/announcements/:id/read', (ctx) => {
   const u = needMember(ctx);
   if (!u) return;
-  db.markAnnouncementRead(ctx.params.id, u.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه اطلاعیه نامعتبر است');
+  db.markAnnouncementRead(id, u.id);
   ctx.json({ ok: true });
 });
 
@@ -616,7 +654,9 @@ app.post('/api/notifications/read', (ctx) => {
 app.post('/api/notifications/:id/read', (ctx) => {
   const u = needMember(ctx);
   if (!u) return;
-  const changed = db.markNotificationRead(ctx.params.id, u.id);
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه اعلان نامعتبر است');
+  const changed = db.markNotificationRead(id, u.id);
   ctx.json({ ok: true, changed, unread: db.unreadCount(u.id) });
 });
 
@@ -634,17 +674,30 @@ app.get('/api/tuition/receipts', (ctx) => {
   });
 });
 
+app.get('/api/tuition/receipts/:id/image', (ctx) => {
+  const u = needMember(ctx);
+  if (!u) return;
+  const id = parseId(ctx.params.id);
+  if (!id) return bad(ctx, 'شناسه فیش نامعتبر است');
+  const item = db.getTuitionReceiptImage(id);
+  if (!item || item.receipt.user_id !== u.id) return bad(ctx, 'تصویر فیش پیدا نشد', 404);
+  if (item.buffer) return ctx.binary(item.buffer, item.mime, { etag: item.etag });
+  if (item.dataUrl) return ctx.image(item.dataUrl);
+  return bad(ctx, 'تصویر فیش پیدا نشد', 404);
+});
+
 app.post('/api/tuition/receipts', (ctx) => {
   const u = needMember(ctx);
   if (!u) return;
   if (u.impersonated) return bad(ctx, 'برای ارسال فیش باید مستقیماً وارد حساب خود شوید', 403);
+  if (!rateLimit('receipt:' + u.id, 15, 600000)) return bad(ctx, 'تعداد ارسال فیش بیش از حد است؛ کمی صبر کنید', 429);
   const b = ctx.body || {};
   const j = todayJalali();
   const year = b.year === undefined || b.year === '' ? j.jy : Number(enNum(b.year));
   const month = b.month === undefined || b.month === '' ? j.jm : Number(enNum(b.month));
   const amountRaw = enNum(String(b.amount_toman || '').replace(/[,\s٬]/g, ''));
   const amount_toman = Number(amountRaw);
-  const tracking_code = sanitize(enNum(String(b.tracking_code || '').trim())).slice(0, 64);
+  const tracking_code = sanitize(enNum(String(b.tracking_code || '').trim()), 64);
   const cardLast4Raw = b.card_last4 ? enNum(String(b.card_last4).trim()) : '';
 
   if (!Number.isInteger(year) || year < 1300 || year > 1600 || !Number.isInteger(month) || month < 1 || month > 12) {
@@ -666,13 +719,18 @@ app.post('/api/tuition/receipts', (ctx) => {
     if (img.length > 1800000) {
       return bad(ctx, 'حجم تصویر فیش نباید بیشتر از ۱.۲ مگابایت باشد');
     }
-    if (!/^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/.test(img)) {
-      return bad(ctx, 'فرمت تصویر فیش مجاز نیست؛ فقط PNG، JPG یا WEBP مجاز است');
+    try {
+      storage.parseDataUrl(img, {
+        allowedMimes: ['image/png', 'image/jpeg', 'image/webp'],
+        maxBytes: 1350000
+      });
+    } catch {
+      return bad(ctx, 'فرمت تصویر فیش مجاز نیست؛ فقط PNG، JPG یا WEBP معتبر مجاز است');
     }
     receipt_image = img;
   }
 
-  const note = b.note ? sanitize(String(b.note).trim()).slice(0, 500) : null;
+  const note = b.note ? sanitize(String(b.note).trim(), 500) : null;
   const receipt = db.createTuitionReceipt({
     user_id: u.id,
     year,

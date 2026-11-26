@@ -502,7 +502,7 @@
                         ${r.note ? `<div class="tiny" style="margin-top:4px">یادداشت شما: ${esc(r.note)}</div>` : ''}
                         ${r.coach_note ? `<div class="hint" style="margin-top:8px">پاسخ مربی: ${esc(r.coach_note)}</div>` : ''}
                       </div>
-                      ${r.receipt_image ? `<button type="button" class="btn sm ghost" data-view-receipt-img="${r.id}">مشاهده تصویر فیش</button>` : ''}
+                      ${(r.has_receipt_image || r.receipt_image) ? `<button type="button" class="btn sm ghost" data-view-receipt-img="${r.id}">مشاهده تصویر فیش</button>` : ''}
                     </div>
                   </div>`;
               }).join('')}
@@ -531,7 +531,7 @@
         compressedImage = await compressReceiptFile(f);
         previewBox.innerHTML = `
           <div class="row wrap" style="gap:10px;align-items:center">
-            <img src="${compressedImage}" alt="پیش‌نمایش فیش" style="max-height:96px;border-radius:10px;border:1px solid var(--line)">
+            <img src="${esc(compressedImage)}" decoding="async" alt="پیش‌نمایش فیش" style="max-height:96px;border-radius:10px;border:1px solid var(--line)">
             <button type="button" class="btn sm danger" id="clearReceiptImgBtn">حذف تصویر</button>
           </div>`;
         previewBox.querySelector('#clearReceiptImgBtn')?.addEventListener('click', () => {
@@ -569,11 +569,12 @@
     container.querySelectorAll('[data-view-receipt-img]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const rec = (receipts || []).find((x) => String(x.id) === btn.dataset.viewReceiptImg);
-        if (!rec || !rec.receipt_image) return;
+        if (!rec || (!rec.has_receipt_image && !rec.receipt_image)) return;
+        const src = rec.receipt_image || `${UI.PATH_PREFIX}/api/tuition/receipts/${encodeURIComponent(rec.id)}/image`;
         modal({
           title: `تصویر فیش ${J.MONTHS[rec.month - 1]} ${fa(rec.year)}`,
           wide: true,
-          body: `<div style="text-align:center"><img src="${rec.receipt_image}" alt="تصویر فیش پرداخت" style="max-width:100%;max-height:70vh;border-radius:12px"></div>`,
+          body: `<div style="text-align:center"><img src="${esc(src)}" decoding="async" alt="تصویر فیش پرداخت" style="max-width:100%;max-height:70vh;border-radius:12px"></div>`,
           actions: [{ label: 'بستن', class: 'ghost', onClick: closeModal }]
         });
       });
