@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS users (
   insurance_file TEXT,
   insurance_file_name TEXT,
   insurance_updated_at TEXT,
+  last_seen_at   TEXT,
   active         INTEGER NOT NULL DEFAULT 1,
   created_at     TEXT NOT NULL,
   updated_at     TEXT NOT NULL
@@ -311,6 +312,9 @@ try {
   if (!all("PRAGMA table_info('users')").some(c => c.name === 'insurance_updated_at')) {
     db.exec('ALTER TABLE users ADD COLUMN insurance_updated_at TEXT DEFAULT NULL');
   }
+  if (!all("PRAGMA table_info('users')").some(c => c.name === 'last_seen_at')) {
+    db.exec('ALTER TABLE users ADD COLUMN last_seen_at TEXT DEFAULT NULL');
+  }
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(lower(email)) WHERE email IS NOT NULL AND email != ''");
   db.exec('COMMIT');
 } catch (err) {
@@ -364,6 +368,39 @@ function verifyPassword(password, hash, salt) {
 /* --------------------------------- کاربران -------------------------------- */
 
 const now = () => new Date().toISOString();
+const ONLINE_WINDOW_MS = 60 * 1000;
+const _presenceTouchCache = new Map();
+
+function isUserOnline(lastSeenAt, windowMs = ONLINE_WINDOW_MS) {
+  if (!lastSeenAt) return false;
+  const t = Date.parse(lastSeenAt);
+  if (!Number.isFinite(t)) return false;
+  const diff = Date.now() - t;
+  return diff >= -5000 && diff <= windowMs;
+}
+
+function touchUserPresence(userId, force = false) {
+  const id = Number(userId);
+  if (!id) return null;
+  const ms = Date.now();
+  const prev = _presenceTouchCache.get(id) || 0;
+  if (!force && ms - prev < 15000) return new Date(prev).toISOString();
+  const ts = new Date(ms).toISOString();
+  _presenceTouchCache.set(id, ms);
+  try {
+    run('UPDATE users SET last_seen_at = ? WHERE id = ?', ts, id);
+  } catch { /* ignore transient lock */ }
+  return ts;
+}
+
+function clearUserPresence(userId) {
+  const id = Number(userId);
+  if (!id) return;
+  _presenceTouchCache.delete(id);
+  try {
+    run('UPDATE users SET last_seen_at = NULL WHERE id = ?', id);
+  } catch { /* ignore */ }
+}
 
 function normalizeEmail(email) {
   if (email === undefined) return undefined;
@@ -420,6 +457,8 @@ function publicUser(u) {
     has_insurance: !!u.insurance_file,
     insurance_file_name: u.insurance_file_name || null,
     insurance_updated_at: u.insurance_updated_at || null,
+    last_seen_at: u.last_seen_at || null,
+    is_online: isUserOnline(u.last_seen_at),
     active: !!u.active,
     created_at: u.created_at
   };
@@ -1104,6 +1143,7 @@ module.exports = {
   findByUsername, findByEmail, normalizeEmail, findById, publicUser, createUser, updateUser, listMembers,
   getUserInsurance, setUserInsurance,
   getUserPhoto, setUserPhoto,
+  ONLINE_WINDOW_MS, isUserOnline, touchUserPresence, clearUserPresence,
   createSession, sessionUser, renewSession, destroySession, setPassword,
   createAnnouncement, getAnnouncement, listAnnouncements, announcementsFor,
   markAnnouncementRead, updateAnnouncement, deleteAnnouncement,

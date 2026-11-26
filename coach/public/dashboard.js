@@ -21,6 +21,7 @@
     memberDiscipline: '',
     memberActive: '',
     memberFollowup: '',
+    memberPresence: '',
     careTab: 'attendance',
     progressMode: 'member',
     progressUserId: null,
@@ -78,6 +79,10 @@
     switchView('overview');
     pollBell();
     setInterval(pollBell, 45000);
+    setInterval(() => { if (!document.hidden) pollPresence(); }, 12000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) { pollBell(); pollPresence(); }
+    });
   }
 
   async function refreshBase() {
@@ -143,6 +148,53 @@
   const loadingHTML = () => '<div class="card center" style="padding:40px"><span class="loader"></span></div>';
   const emptyHTML = (text, icon = '🗂') => `<div class="empty"><span class="big">${icon}</span>${esc(text)}</div>`;
 
+  function presenceBadge(m, showLastSeen = false) {
+    const on = !!(m && m.is_online);
+    const id = m && (m.user_id || m.id);
+    const title = !on && m && m.last_seen_at
+      ? 'آخرین حضور: ' + J.timeAgo(m.last_seen_at)
+      : (on ? 'هم‌اکنون در پنل شاگرد آنلاین است' : 'آفلاین');
+    return `<span class="presence-pill ${on ? 'is-online' : 'is-offline'}" ${id ? `data-presence-uid="${id}"` : ''} title="${esc(title)}"><span class="presence-dot" aria-hidden="true"></span><span class="presence-txt">${on ? 'آنلاین' : 'آفلاین'}</span></span>` +
+      (showLastSeen && !on && m && m.last_seen_at ? ` <span class="tiny muted" data-presence-seen="${id}">${esc(J.timeAgo(m.last_seen_at))}</span>` : '');
+  }
+
+  async function pollPresence() {
+    try {
+      const p = await api('/api/members/presence');
+      if (!p || !Array.isArray(p.members)) return;
+      const byId = new Map(p.members.map((x) => [x.id, x]));
+      MEMBERS.forEach((m) => {
+        const info = byId.get(m.id);
+        if (info) {
+          m.is_online = !!info.is_online;
+          m.last_seen_at = info.last_seen_at;
+        }
+      });
+      document.querySelectorAll('[data-online-count]').forEach((el) => {
+        el.textContent = fa(p.online_count || 0);
+      });
+      document.querySelectorAll('[data-presence-uid]').forEach((el) => {
+        const id = Number(el.dataset.presenceUid);
+        const info = byId.get(id);
+        if (!info) return;
+        const on = !!info.is_online;
+        el.classList.toggle('is-online', on);
+        el.classList.toggle('is-offline', !on);
+        el.title = !on && info.last_seen_at
+          ? 'آخرین حضور: ' + J.timeAgo(info.last_seen_at)
+          : (on ? 'هم‌اکنون در پنل شاگرد آنلاین است' : 'آفلاین');
+        const txt = el.querySelector('.presence-txt');
+        if (txt) txt.textContent = on ? 'آنلاین' : 'آفلاین';
+      });
+      document.querySelectorAll('[data-presence-seen]').forEach((el) => {
+        const id = Number(el.dataset.presenceSeen);
+        const info = byId.get(id);
+        if (!info) return;
+        el.textContent = !info.is_online && info.last_seen_at ? J.timeAgo(info.last_seen_at) : '';
+      });
+    } catch { /* نادیده */ }
+  }
+
   /* ================================ داشبورد =============================== */
 
   async function renderOverview(box) {
@@ -160,11 +212,12 @@
 
     const alerts = d.careAlerts || [];
     const pendingRecs = Number(d.pendingReceipts || 0);
+    const onlineMembers = Number(d.stats.onlineMembers || 0);
 
     box.innerHTML = `
       <div class="stack">
         <div class="grid-4">
-          ${statTile('شاگردان فعال', fa(d.stats.activeMembers), `از ${fa(d.stats.members)} عضو ثبت‌شده`, 'var(--red)')}
+          ${statTile('شاگردان فعال', fa(d.stats.activeMembers), `<span data-online-count>${fa(onlineMembers)}</span> نفر آنلاین اکنون`, 'var(--red)', true)}
           ${statTile('تمرین ارسال‌شده', fa(d.stats.plans), `${fa(d.stats.done)} مورد تکمیل شده`, 'var(--gold)')}
           ${statTile('در انتظار انجام', fa(d.stats.pending), 'تمرین باز بین شاگردان', 'var(--blue)')}
           ${statTile('فیش‌های در انتظار تایید', fa(pendingRecs), alerts.length ? `${fa(alerts.length)} مورد نیازمند پیگیری` : 'همه بررسی شده', pendingRecs ? 'var(--red)' : 'var(--green)')}
@@ -236,12 +289,15 @@
             </div>
 
             <div class="card">
-              <div class="card-head"><div class="card-title"><span class="dot" style="background:var(--blue);box-shadow:0 0 10px var(--blue)"></span> تازه‌ترین شاگردان</div></div>
+              <div class="card-head">
+                <div class="card-title"><span class="dot" style="background:var(--blue);box-shadow:0 0 10px var(--blue)"></span> تازه‌ترین شاگردان</div>
+                <span class="presence-pill is-online"><span class="presence-dot" aria-hidden="true"></span><span><span data-online-count>${fa(onlineMembers)}</span> آنلاین</span></span>
+              </div>
               ${d.latestMembers.map((m) => `
                 <div class="list-item">
                   ${avatar({ id: m.id, full_name: m.full_name, avatar_color: m.avatar_color, has_photo: m.has_photo, photo_updated_at: m.photo_updated_at }, 'sm')}
                   <div class="grow">
-                    <div class="title">${esc(m.full_name)}</div>
+                    <div class="row wrap" style="gap:6px"><span class="title">${esc(m.full_name)}</span>${presenceBadge(m)}</div>
                     <div class="tiny">@${esc(m.username)} · ${esc(m.belt || '—')} · عضویت ${J.formatShort(m.created_at)}</div>
                   </div>
                   <button class="btn sm ghost" data-open-member="${m.id}">پروفایل</button>
@@ -287,11 +343,11 @@
     });
   }
 
-  function statTile(label, value, sub, color) {
+  function statTile(label, value, sub, color, rawSub = false) {
     return `<div class="stat" style="--accent:${color}">
       <div class="label">${esc(label)}</div>
       <div class="value">${value}</div>
-      <div class="sub">${esc(sub)}</div>
+      <div class="sub">${rawSub ? sub : esc(sub)}</div>
     </div>`;
   }
 
@@ -311,7 +367,10 @@
     box.innerHTML = `
       <div class="card">
         <div class="card-head">
-          <div class="card-title"><span class="dot"></span> فهرست شاگردان <span class="badge dark" id="memberCount"></span></div>
+          <div class="row wrap" style="gap:8px">
+            <div class="card-title"><span class="dot"></span> فهرست شاگردان <span class="badge dark" id="memberCount"></span></div>
+            <span class="presence-pill is-online"><span class="presence-dot" aria-hidden="true"></span><span><span data-online-count>${fa(MEMBERS.filter((m) => m.is_online).length)}</span> آنلاین</span></span>
+          </div>
           <div class="row wrap">
             <div class="search">
               <span class="ic">⌕</span>
@@ -324,6 +383,11 @@
             <select id="beltFilter" style="width:135px">
               <option value="">همه کمربندها</option>
               ${belts.map((b) => `<option value="${esc(b)}" ${state.memberBelt === b ? 'selected' : ''}>${esc(b)}</option>`).join('')}
+            </select>
+            <select id="presenceFilter" style="width:130px">
+              <option value="">وضعیت اتصال</option>
+              <option value="online" ${state.memberPresence === 'online' ? 'selected' : ''}>فقط آنلاین‌ها</option>
+              <option value="offline" ${state.memberPresence === 'offline' ? 'selected' : ''}>آفلاین‌ها</option>
             </select>
             <select id="activeFilter" style="width:120px">
               <option value="">همه وضعیت‌ها</option>
@@ -349,6 +413,8 @@
         if (q && !m.full_name.toLowerCase().includes(q) && !m.username.includes(q) && !(m.phone || '').includes(q)) return false;
         if (state.memberBelt && m.belt !== state.memberBelt) return false;
         if (state.memberDiscipline && (m.discipline || m.style || '') !== state.memberDiscipline) return false;
+        if (state.memberPresence === 'online' && !m.is_online) return false;
+        if (state.memberPresence === 'offline' && m.is_online) return false;
         if (state.memberActive === '1' && !m.active) return false;
         if (state.memberActive === '0' && m.active) return false;
         if (state.memberFollowup === 'tuition' && !m.needs_tuition_followup) return false;
@@ -371,8 +437,11 @@
                 <div class="row" style="gap:10px">
                   ${avatar(m)}
                   <div>
-                    <div class="bold">${esc(m.full_name)}</div>
-                    <div class="tiny">@${esc(m.username)} ${m.active ? '' : '<span class="badge red">غیرفعال</span>'}</div>
+                    <div class="row wrap" style="gap:6px">
+                      <span class="bold">${esc(m.full_name)}</span>
+                      ${presenceBadge(m)}
+                    </div>
+                    <div class="tiny">@${esc(m.username)} ${m.active ? '' : '<span class="badge red">غیرفعال</span>'} ${!m.is_online && m.last_seen_at ? `· <span data-presence-seen="${m.id}">آخرین بازدید ${esc(J.timeAgo(m.last_seen_at))}</span>` : `<span data-presence-seen="${m.id}"></span>`}</div>
                   </div>
                 </div>
               </td>
@@ -433,6 +502,7 @@
     });
     document.getElementById('discFilter').addEventListener('change', (e) => { state.memberDiscipline = e.target.value; draw(); });
     document.getElementById('beltFilter').addEventListener('change', (e) => { state.memberBelt = e.target.value; draw(); });
+    document.getElementById('presenceFilter').addEventListener('change', (e) => { state.memberPresence = e.target.value; draw(); });
     document.getElementById('activeFilter').addEventListener('change', (e) => { state.memberActive = e.target.value; draw(); });
     document.getElementById('followupFilter').addEventListener('change', (e) => { state.memberFollowup = e.target.value; draw(); });
     document.getElementById('exportMembersCsv').addEventListener('click', () => {
@@ -523,7 +593,10 @@
         <div class="row" style="gap:14px;margin-bottom:14px">
           ${avatar(m, 'lg')}
           <div class="grow">
-            <div class="bold" style="font-size:17px">${esc(m.full_name)}</div>
+            <div class="row wrap" style="gap:8px">
+              <div class="bold" style="font-size:17px">${esc(m.full_name)}</div>
+              ${presenceBadge(m, true)}
+            </div>
             <div class="tiny">@${esc(m.username)} · عضو از ${J.formatShort(m.created_at)}</div>
             <div class="row" style="gap:6px;margin-top:6px">
               <span class="badge gold">${esc(m.belt || '—')}</span>

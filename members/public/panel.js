@@ -69,8 +69,12 @@
     const initialBell=pollBell();
     await switchView(initialView);
     await initialBell;
-    setInterval(()=>{if(!document.hidden)pollBell();}, 45000);
-    document.addEventListener('visibilitychange',()=>{if(!document.hidden)pollBell();});
+    const sendPresence = () => {
+      if (document.hidden) return;
+      api('/api/presence', { method: 'POST', body: { status: 'online' } }).catch(() => {});
+    };
+    setInterval(()=>{if(!document.hidden){pollBell();sendPresence();}}, 25000);
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden){pollBell();sendPresence();}});
   }
 
   const loadingHTML = () => '<div class="card center" style="padding:40px"><span class="loader"></span></div>';

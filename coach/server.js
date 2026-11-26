@@ -261,12 +261,17 @@ app.get('/api/overview', (ctx) => {
      WHERE sr.verified=1 AND u.verified=1 ORDER BY sr.created_at DESC LIMIT 8`
   );
   const latestMembers = db.all(
-    "SELECT id, full_name, username, belt, avatar_color, (avatar_photo IS NOT NULL AND avatar_photo != '') AS has_photo, avatar_updated_at AS photo_updated_at, join_date, created_at FROM users WHERE verified=1 AND role='member' ORDER BY created_at DESC LIMIT 5"
-  );
+    "SELECT id, full_name, username, belt, avatar_color, (avatar_photo IS NOT NULL AND avatar_photo != '') AS has_photo, avatar_updated_at AS photo_updated_at, last_seen_at, join_date, created_at FROM users WHERE verified=1 AND role='member' ORDER BY created_at DESC LIMIT 5"
+  ).map((m) => ({
+    ...m,
+    is_online: db.isUserOnline(m.last_seen_at)
+  }));
   const pendingReceipts = db.get(
     "SELECT COUNT(*) AS c FROM tuition_receipts r JOIN users u ON u.id = r.user_id WHERE r.status = 'pending' AND u.verified = 1"
   ).c;
-  const careAlerts = db.listMembers({ active: 1 }).map((m) => {
+  const activeMembers = db.listMembers({ active: 1 });
+  const onlineCount = activeMembers.filter((m) => db.isUserOnline(m.last_seen_at)).length;
+  const careAlerts = activeMembers.map((m) => {
     const care = db.memberCareStatus(m.id, j.jy, j.jm, j.jd);
     return {
       id: m.id,
@@ -277,12 +282,14 @@ app.get('/api/overview', (ctx) => {
       avatar_color: m.avatar_color,
       has_photo: !!m.avatar_photo,
       photo_updated_at: m.avatar_updated_at || null,
+      last_seen_at: m.last_seen_at || null,
+      is_online: db.isUserOnline(m.last_seen_at),
       ...care
     };
   }).filter((m) => m.needs_absence_followup || m.tuition_status === 'overdue' || m.tuition_status === 'due_soon');
   ctx.json({
     ok: true,
-    stats: db.stats(),
+    stats: { ...db.stats(), onlineMembers: onlineCount },
     pendingReceipts,
     careAlerts,
     today: formatJalali(new Date()),
@@ -333,6 +340,18 @@ app.get('/api/members', (ctx) => {
     belts: db.all("SELECT DISTINCT belt FROM users WHERE verified=1 AND role='member' AND belt IS NOT NULL ORDER BY belt").map((r) => r.belt),
     disciplines: db.all("SELECT DISTINCT COALESCE(discipline, style) AS d FROM users WHERE verified=1 AND role='member' AND COALESCE(discipline, style) IS NOT NULL AND COALESCE(discipline, style) != '' ORDER BY d").map((r) => r.d)
   });
+});
+
+app.get('/api/members/presence', (ctx) => {
+  if (!needCoach(ctx)) return;
+  const rows = db.all("SELECT id, last_seen_at FROM users WHERE verified = 1 AND role = 'member'");
+  const members = rows.map((m) => ({
+    id: m.id,
+    last_seen_at: m.last_seen_at || null,
+    is_online: db.isUserOnline(m.last_seen_at)
+  }));
+  const online_count = members.filter((m) => m.is_online).length;
+  ctx.json({ ok: true, server_time: db.now(), window_ms: db.ONLINE_WINDOW_MS, online_count, members });
 });
 
 app.post('/api/members', (ctx) => {
@@ -501,6 +520,8 @@ app.get('/api/attendance', (ctx) => {
       avatar_color: m.avatar_color,
       has_photo: !!m.avatar_photo,
       photo_updated_at: m.avatar_updated_at || null,
+      last_seen_at: m.last_seen_at || null,
+      is_online: db.isUserOnline(m.last_seen_at),
       status: rec ? rec.status : null,
       note: rec ? (rec.note || '') : '',
       consecutive_absences: care.consecutive_absences,

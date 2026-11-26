@@ -354,6 +354,33 @@ const PNG_1PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfF
     assert.equal((await fetch(base + '/api/me/photo', { headers: { cookie: kiaCookie } })).status, 404);
     assert.equal((await fetch(base + `/coach/api/members/${kiaId}/photo`, { headers: { cookie: coachCookie } })).status, 404);
 
+    // 10. Real-time Online/Offline student presence tracking & coach indicator
+    assert.equal((await api('/api/presence', { status: 'online' })).status, 401);
+    assert.equal((await api('/coach/api/members/presence')).status, 401);
+    assert.equal((await api('/coach/api/members/presence', null, secondCookie)).status, 401);
+
+    const pulse = await api('/api/presence', { status: 'online' }, kiaCookie);
+    assert.equal(pulse.status, 200);
+    assert.equal(pulse.body.is_online, true);
+    assert.ok(pulse.body.last_seen_at);
+
+    const coachPresOn = await api('/coach/api/members/presence', null, coachCookie);
+    assert.equal(coachPresOn.status, 200);
+    assert.ok(coachPresOn.body.online_count >= 1);
+    assert.equal(coachPresOn.body.members.find((m) => m.id === kiaId)?.is_online, true);
+
+    const coachMemOn = await api('/coach/api/members', null, coachCookie);
+    assert.equal(coachMemOn.body.members.find((m) => m.id === kiaId)?.is_online, true);
+
+    // Logging out marks the member offline immediately for the coach
+    assert.equal((await api('/api/logout', {}, kiaCookie)).status, 200);
+    const coachPresOff = await api('/coach/api/members/presence', null, coachCookie);
+    assert.equal(coachPresOff.status, 200);
+    assert.equal(coachPresOff.body.members.find((m) => m.id === kiaId)?.is_online, false);
+
+    assert.ok(panelJs.includes('/api/presence'), 'panel.js must send presence heartbeats');
+    assert.ok(coachDashJs.includes('/api/members/presence') && coachDashJs.includes('presence-pill'), 'coach dashboard.js must poll and render Online/Offline indicators');
+
     const cardStackJs = await (await fetch(base + '/CardStack.js')).text();
     assert.ok(!cardStackJs.includes('Math.min(cards.length, 6)'), 'CardStack must not truncate at 6 cards');
     assert.ok(!cardStackJs.includes('stk-chip'), 'CardStack must not render bottom stk-chip buttons');

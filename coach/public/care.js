@@ -100,7 +100,10 @@
                       <div class="row" style="gap:8px">
                         ${avatar(m, 'sm')}
                         <div>
-                          <div class="bold">${esc(m.full_name)}</div>
+                          <div class="row wrap" style="gap:6px">
+                            <span class="bold">${esc(m.full_name)}</span>
+                            <span class="presence-pill ${m.is_online ? 'is-online' : 'is-offline'}" data-presence-uid="${m.id}"><span class="presence-dot" aria-hidden="true"></span><span class="presence-txt">${m.is_online ? 'آنلاین' : 'آفلاین'}</span></span>
+                          </div>
                           <div class="tiny muted">${esc(m.belt || '—')}</div>
                         </div>
                       </div>

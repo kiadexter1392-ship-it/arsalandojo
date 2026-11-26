@@ -29,7 +29,11 @@ const app = createServer({
 /* -------------------------------- ابزارها -------------------------------- */
 
 function member(ctx) {
-  return authSession.restore(ctx, app.cookieName, SITE, u => u.role === 'member');
+  const u = authSession.restore(ctx, app.cookieName, SITE, user => user.role === 'member');
+  if (u && !u.impersonated) {
+    u.last_seen_at = db.touchUserPresence(u.id) || u.last_seen_at;
+  }
+  return u;
 }
 
 function needMember(ctx) {
@@ -268,6 +272,7 @@ function doRegister(ctx, b) {
   }, 'member');
 
   authSession.signIn(ctx, user.id, SITE, app.cookieName);
+  db.touchUserPresence(user.id, true);
 
   db.pushNotification(user.id, {
     type: 'welcome',
@@ -329,6 +334,7 @@ app.post('/login', (ctx) => {
     return;
   }
   authSession.signIn(ctx, u.id, SITE, app.cookieName);
+  u.last_seen_at = db.touchUserPresence(u.id, true);
   db.logActivity(u.id, u.full_name, 'وارد پنل کاربری شد', null);
   ctx.redirect('/panel');
 });
@@ -341,6 +347,7 @@ app.post('/api/login', (ctx) => {
   }
   if (!u.active) return bad(ctx, 'حساب کاربری شما غیرفعال است؛ با مربی تماس بگیرید', 403);
   authSession.signIn(ctx, u.id, SITE, app.cookieName);
+  u.last_seen_at = db.touchUserPresence(u.id, true);
   db.logActivity(u.id, u.full_name, 'وارد پنل کاربری شد', null);
   ctx.json({ ok: true, user: db.publicUser(u) });
 });
@@ -368,6 +375,7 @@ app.post('/api/auth/google', async (ctx) => {
     return bad(ctx, 'حساب کاربری شما غیرفعال است؛ با مربی تماس بگیرید', 403);
   }
   authSession.signIn(ctx, u.id, SITE, app.cookieName);
+  u.last_seen_at = db.touchUserPresence(u.id, true);
   db.logActivity(u.id, u.full_name, 'با گوگل وارد پنل کاربری شد', verified.email);
   ctx.json({
     ok: true,
@@ -378,8 +386,26 @@ app.post('/api/auth/google', async (ctx) => {
 });
 
 app.post('/api/logout', (ctx) => {
+  const u = member(ctx);
+  if (u && !u.impersonated) db.clearUserPresence(u.id);
   authSession.signOut(ctx, app.cookieName, SITE);
   ctx.json({ ok: true });
+});
+
+app.post('/api/presence', (ctx) => {
+  const u = needMember(ctx);
+  if (!u) return;
+  const status = ctx.body && ctx.body.status === 'offline' ? 'offline' : 'online';
+  let lastSeen = u.last_seen_at || null;
+  if (!u.impersonated) {
+    if (status === 'offline') {
+      db.clearUserPresence(u.id);
+      lastSeen = null;
+    } else {
+      lastSeen = db.touchUserPresence(u.id, true);
+    }
+  }
+  ctx.json({ ok: true, is_online: db.isUserOnline(lastSeen), last_seen_at: lastSeen });
 });
 
 app.get('/api/me', (ctx) => {
