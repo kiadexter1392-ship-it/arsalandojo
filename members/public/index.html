@@ -145,21 +145,19 @@
 
     <div id="errorMsg" class="hidden" style="background:rgba(255,107,94,0.1);border:1px solid rgba(255,107,94,0.3);color:#ff6b5e;padding:12px;border-radius:10px;font-size:14px;margin-bottom:16px"></div>
 
-    <form id="loginForm" autocomplete="on">
-      <div class="form-row">
-        <div class="form-group" style="grid-column:1/-1"><label for="lUser">نام کاربری</label><input id="lUser" class="en" placeholder="نام کاربری" autocomplete="username" required></div>
-      </div>
+    <form id="loginForm" class="auth-form-grid" autocomplete="on">
+      <div class="form-group"><label for="lUser">نام کاربری</label><input id="lUser" class="en" placeholder="نام کاربری" autocomplete="username" required></div>
 
       <!-- One-Time Code as password -->
-      <div style="margin:16px 0 8px">
-        <label style="font-size:13px;color:var(--text-light);display:block;margin-bottom:8px">رمز عبور (کد ۶ رقمی)</label>
+      <div class="form-group otp-field-group">
+        <label>رمز عبور (کد ۶ رقمی)</label>
         <div id="otpMount"></div>
       </div>
 
-      <button type="submit" class="btn btn-gold btn-full" id="loginBtn" style="margin-top:12px">ورود</button>
+      <button type="submit" class="btn btn-gold btn-full" id="loginBtn">ورود</button>
     </form>
 
-    <form id="registerForm" class="hidden" autocomplete="on">
+    <form id="registerForm" class="auth-form-grid hidden" autocomplete="on">
       <div class="form-row">
         <div class="form-group"><label>نام و نام خانوادگی *</label><input name="full_name" required></div>
         <div class="form-group"><label>نام کاربری (انگلیسی) *</label><input name="username" class="en" required minlength="3" autocomplete="username"></div>
@@ -181,9 +179,7 @@
         <div class="form-group"><label>رمز عبور * <span class="req">(۶+ حرف)</span></label><input name="password" type="password" class="en" minlength="6" required autocomplete="new-password"></div>
         <div class="form-group"><label>تکرار رمز *</label><input name="password2" type="password" class="en" minlength="6" required autocomplete="new-password"></div>
       </div>
-      <div class="form-row">
-        <div class="form-group" style="grid-column:1/-1"><label for="rEmail">جیمیل (برای ورود مستقیم با گوگل)</label><input id="rEmail" name="email" type="email" class="en" dir="ltr" placeholder="example@gmail.com" autocomplete="email"></div>
-      </div>
+      <div class="form-group"><label for="rEmail">جیمیل (برای ورود مستقیم با گوگل)</label><input id="rEmail" name="email" type="email" class="en" dir="ltr" placeholder="example@gmail.com" autocomplete="email"></div>
       <button type="submit" class="btn btn-gold btn-full" id="registerBtn">ثبت‌نام و ورود به پنل</button>
     </form>
 
@@ -559,6 +555,9 @@
       otpInstance = window.OneTimeCode.mount(mount, {
         length: 6,
         answer: 'Accept',
+        onChange: function(code) {
+          otpCode = code;
+        },
         onVerify: function(code) {
           otpCode = code;
           showToast('کد وارد شد', 'ok');
@@ -566,8 +565,7 @@
       });
     }
   }
-  /* Init OTP on load */
-  setTimeout(initOTP, 300);
+  initOTP();
 
   /* ── Google Sign-In directly into Member /panel (or pre-filled Register) ── */
   window.__dojoHandleGoogleIdToken = function(idToken) {
@@ -629,7 +627,7 @@
     showAuthMsg('');
     var btn = document.getElementById('loginBtn');
     btn.disabled = true; btn.textContent = '...';
-    var password = otpCode || document.getElementById('lPass')?.value || '';
+    var password = (otpInstance && otpInstance.getValue ? otpInstance.getValue() : otpCode) || document.getElementById('lPass')?.value || '';
     UI.api('/api/login', { method: 'POST', body: {
       username: document.getElementById('lUser').value,
       password: password

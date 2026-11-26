@@ -1,15 +1,5 @@
 /* ══ One-Time Code — Vanilla JS ════════════════════════════
-   Adapted from Bencho's React Otp component.
    Six cells, caret, merge capsule with goo filter.
-
-   Token mapping (Bencho → project):
-     --card      → rgba(212,168,83,0.18) (amber glass)
-     --fill-on   → #1a1a2e (dark text)
-     --fill-slab → rgba(255,255,255,0.85) (cell surface)
-     --font-ui   → 'Vazirmatn', Tahoma, sans-serif
-     --ink       → #1a1a2e (same as fill-on)
-
-   No React, no framer-motion, no lucide-react.
    Spring physics + SVG goo filter in vanilla JS.
 */
 
@@ -20,7 +10,7 @@
   const H = 50;
   const G = 8;
   const CAP = 160;
-  const POP_MS = 260;
+  const POP_MS = 180;
   const SHAKE_MS = 620;
 
   const MERGE_K = 0.075;
@@ -33,12 +23,20 @@
     return u * u * (3 - 2 * u);
   }
 
+  function normalizeDigits(str) {
+    return String(str || '')
+      .replace(/[۰-۹]/g, function(ch) { return String('۰۱۲۳۴۵۶۷۸۹'.indexOf(ch)); })
+      .replace(/[٠-٩]/g, function(ch) { return String('٠١٢٣٤٥٦٧٨٩'.indexOf(ch)); })
+      .replace(/\D/g, '');
+  }
+
   function OneTimeCode(container, options) {
     if (!container) return;
     options = options || {};
     var length = options.length || 6;
     var answer = options.answer || 'Accept';
     var onVerify = options.onVerify || function() {};
+    var onChange = options.onChange || function() {};
 
     var code = '';
     var phase = 'type'; /* type | check | ok | no */
@@ -49,7 +47,8 @@
     var mergeState = { m: 0, v: 0, to: 0 };
     var shookAt = 0;
     var rafId = 0;
-    var timers = [];
+    var verifyTimer = 0;
+    var resetTimer = 0;
 
     /* Build goo filter SVG */
     var gooId = 'otp-goo-' + Math.random().toString(36).slice(2, 8);
@@ -72,6 +71,7 @@
     /* Row */
     var row = document.createElement('div');
     row.className = 'otp-row';
+    row.setAttribute('dir', 'ltr');
     row.style.width = rowW + 'px';
     row.style.height = H + 'px';
 
@@ -82,6 +82,7 @@
 
     /* Slots (digits) */
     var slots = [];
+    var slotValues = new Array(length).fill('');
     for (var i = 0; i < length; i++) {
       var slot = document.createElement('span');
       slot.className = 'otp-slot';
@@ -98,7 +99,6 @@
     /* OK label */
     var okEl = document.createElement('span');
     okEl.className = 'otp-ok';
-    /* Inline checkmark SVG (replaces lucide Check) */
     okEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> تأیید شد';
     row.appendChild(okEl);
 
@@ -106,6 +106,7 @@
     var input = document.createElement('input');
     input.className = 'otp-field';
     input.type = 'text';
+    input.dir = 'ltr';
     input.inputMode = 'numeric';
     input.setAttribute('autocomplete', 'one-time-code');
     input.setAttribute('data-1p-ignore', '');
@@ -118,8 +119,12 @@
     root.appendChild(row);
     container.appendChild(root);
 
+    function clearPendingTimers() {
+      if (verifyTimer) { clearTimeout(verifyTimer); verifyTimer = 0; }
+      if (resetTimer) { clearTimeout(resetTimer); resetTimer = 0; }
+    }
+
     /* Animation loop */
-    var tickCount = 0;
     function wake() {
       if (rafId) return;
       var prev = 0;
@@ -130,8 +135,8 @@
 
         /* Caret spring */
         var target = Math.min(code.length, length - 1) * (W + G) + W / 2;
-        caret.v += (target - caret.x) * 0.2 * dt;
-        caret.v *= Math.pow(0.62, dt);
+        caret.v += (target - caret.x) * 0.25 * dt;
+        caret.v *= Math.pow(0.6, dt);
         caret.x += caret.v * dt;
         if (Math.abs(target - caret.x) < 0.05 && Math.abs(caret.v) < 0.05) {
           caret.x = target; caret.v = 0;
@@ -148,15 +153,14 @@
           } else { busy = true; }
         }
 
-        /* Shake timing */
-        if (performance.now() - shookAt < SHAKE_MS + 200) busy = true;
+        /* Shake / check / pop timing */
+        if (phase === 'check') busy = true;
+        if (shookAt && performance.now() - shookAt < SHAKE_MS + 200) busy = true;
 
-        /* Pop timing */
         for (var pi = 0; pi < popAt.length; pi++) {
           if (popAt[pi] !== undefined && performance.now() - popAt[pi] < POP_MS) { busy = true; break; }
         }
 
-        tickCount++;
         render();
         rafId = busy ? requestAnimationFrame(tick) : 0;
       }
@@ -219,9 +223,9 @@
         capsule.style.display = 'none';
       }
 
-      /* Digits */
+      /* Digits — update DOM only when a slot digit actually changes so CSS entry stays smooth and instant */
       for (var i = 0; i < length; i++) {
-        var d = code[i];
+        var d = code[i] || '';
         var home = i * (W + G);
         var shake = shaking ? 5 * Math.exp(-since / 190) * Math.sin((since / 1000) * Math.PI * 2 * 10 + i * 0.55) : 0;
         var x = mix(home, mid, m) + shake;
@@ -229,11 +233,23 @@
         slots[i].style.transform = 'translateX(' + x.toFixed(2) + 'px)';
         slots[i].style.opacity = 1 - smooth(0, 0.45, m);
 
-        if (d) {
+        if (slotValues[i] !== d) {
+          slotValues[i] = d;
+          if (d) {
+            var span = document.createElement('span');
+            span.className = 'otp-digit';
+            span.textContent = d;
+            slots[i].textContent = '';
+            slots[i].appendChild(span);
+          } else {
+            slots[i].textContent = '';
+          }
+        }
+
+        if (d && slots[i].firstChild) {
           var out = phase === 'no' ? smooth(0, 1, (since - 300 - (length - 1 - i) * 45) / 220) : 0;
-          slots[i].innerHTML = '<span class="otp-digit" style="translate:0 ' + (out * 8).toFixed(2) + 'px;opacity:' + (1 - out) + '">' + d + '</span>';
-        } else {
-          slots[i].innerHTML = '';
+          slots[i].firstChild.style.translate = out ? ('0 ' + (out * 8).toFixed(2) + 'px') : 'none';
+          slots[i].firstChild.style.opacity = out ? String(1 - out) : '1';
         }
       }
 
@@ -271,64 +287,112 @@
     }
     buildCells();
 
+    function reopenForEdit(newCode) {
+      clearPendingTimers();
+      phase = 'type';
+      mergeState = { m: 0, v: 0, to: 0 };
+      shookAt = 0;
+      if (typeof newCode === 'string') {
+        code = newCode;
+        input.value = newCode;
+      }
+      render();
+      wake();
+    }
+
+    /* Keydown handling so Backspace/Delete works even when in check/ok phase */
+    input.addEventListener('keydown', function(e) {
+      if ((e.key === 'Backspace' || e.key === 'Delete') && (phase === 'ok' || phase === 'check')) {
+        e.preventDefault();
+        var trimmed = code.slice(0, -1);
+        for (var j = trimmed.length; j < length; j++) popAt[j] = undefined;
+        reopenForEdit(trimmed);
+        onChange(code);
+        return;
+      }
+      if (phase === 'ok' && /^[0-9۰-۹٠-٩]$/.test(e.key)) {
+        e.preventDefault();
+        var d = normalizeDigits(e.key);
+        popAt[0] = performance.now();
+        reopenForEdit(d);
+        onChange(code);
+      }
+    });
+
     /* Input handling */
     input.addEventListener('input', function(e) {
-      if (phase !== 'type') return;
-      var next = e.target.value.replace(/\D/g, '').slice(0, length);
+      var next = normalizeDigits(e.target.value).slice(0, length);
+      if (e.target.value !== next) e.target.value = next;
 
-      /* Pop animation for new digits */
+      if (phase === 'check' || phase === 'ok') {
+        clearPendingTimers();
+        phase = 'type';
+        mergeState = { m: 0, v: 0, to: 0 };
+      }
+      if (phase !== 'type') return;
+
+      /* Pop animation for newly added digits; clear stale pops when deleting */
       if (next.length > code.length) {
         var t0 = performance.now();
         for (var i = code.length; i < next.length; i++) {
-          popAt[i] = t0 + (i - code.length) * 45;
+          popAt[i] = t0 + (i - code.length) * 35;
         }
-        wake();
+      } else if (next.length < code.length) {
+        for (var j = next.length; j < length; j++) {
+          popAt[j] = undefined;
+        }
       }
 
       code = next;
+      onChange(code);
+      render();
+      wake();
+
       if (code.length < length) return;
 
       /* Full code entered */
       phase = 'check';
+      render();
       wake();
 
-      setTimeout(function() {
+      verifyTimer = setTimeout(function() {
+        verifyTimer = 0;
         if (answer !== 'Reject') {
           phase = 'ok';
           fuse(1);
+          render();
           input.blur();
           if (onVerify) onVerify(code);
         } else {
           phase = 'no';
           shookAt = performance.now();
+          render();
           wake();
-          setTimeout(function() {
+          resetTimer = setTimeout(function() {
+            resetTimer = 0;
             code = '';
             phase = 'type';
             input.value = '';
             buildCells();
+            onChange('');
+            render();
+            wake();
           }, SHAKE_MS + length * 45 + 160);
         }
-      }, 420);
+      }, 160);
     });
 
-    input.addEventListener('focus', function() { focus = true; wake(); });
-    input.addEventListener('blur', function() { focus = false; });
+    input.addEventListener('focus', function() { focus = true; render(); wake(); });
+    input.addEventListener('blur', function() { focus = false; render(); });
 
-    /* Click capsule to reopen */
-    okEl.addEventListener('click', function() {
-      if (phase !== 'ok') return;
-      code = '';
-      phase = 'type';
-      fuse(0);
-      input.value = '';
-      buildCells();
-      input.focus();
-    });
-
-    /* Click anywhere on row to focus input */
-    row.addEventListener('click', function(e) {
-      if (phase === 'ok') return;
+    /* Click capsule or row when completed to reopen and edit */
+    row.addEventListener('click', function() {
+      if (phase === 'ok') {
+        reopenForEdit('');
+        onChange('');
+        input.focus();
+        return;
+      }
       input.focus();
     });
 
@@ -336,12 +400,17 @@
     render();
 
     return {
+      getValue: function() { return code; },
       reset: function() {
+        clearPendingTimers();
         code = '';
         phase = 'type';
         mergeState = { m: 0, v: 0, to: 0 };
+        shookAt = 0;
+        popAt = [];
         input.value = '';
         buildCells();
+        onChange('');
         render();
       },
       focus: function() { input.focus(); }

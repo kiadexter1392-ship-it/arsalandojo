@@ -147,9 +147,10 @@
 .academy-login-form { padding: 46px 38px 32px; align-self: center; }
 .academy-login-form h2 { font-size: 23px; font-weight: 800; margin: 8px 0 12px; }
 .academy-login-form > p { color: var(--academy-muted); font-size: 12px; }
-.academy-login-form form { margin-top: 26px; }
-.academy-login-form label { margin: 18px 0; }
-.academy-login-form form button { width: 100%; margin-top: 8px; }
+.academy-login-form form { margin-top: 26px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.academy-login-form label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; margin: 0; }
+.academy-login-form label input { width: 100%; min-width: 0; box-sizing: border-box; }
+.academy-login-form form button { width: 100%; margin-top: 6px; }
 .academy-login-form .academy-login-security { font-size: 10px; line-height: 2; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--academy-line); }
 
 /* 07 — At 1000px the sidebar becomes a scrollable, searchable section strip.
