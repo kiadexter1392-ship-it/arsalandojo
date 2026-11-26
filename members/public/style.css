@@ -548,6 +548,8 @@ body {
   flex-direction: column;
   justify-content: space-between;
   overflow: hidden;
+  clip-path: inset(0 round var(--radius));
+  -webkit-clip-path: inset(0 round var(--radius));
   box-shadow: var(--shadow);
 }
 

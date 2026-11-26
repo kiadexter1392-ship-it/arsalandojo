@@ -536,6 +536,9 @@ button[type="submit"]:disabled, .btn:disabled { cursor: wait; opacity: 0.72; }
   /* --t is the slot transform, set inline per card */
   transform: var(--t);
   transition: transform 600ms cubic-bezier(0.22, 1, 0.36, 1);
+  overflow: hidden;
+  clip-path: inset(0 round 20px);
+  -webkit-clip-path: inset(0 round 20px);
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
 }

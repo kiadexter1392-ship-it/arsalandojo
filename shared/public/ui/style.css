@@ -244,10 +244,10 @@ form button[type="submit"]:disabled {
 .cards-row { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; margin-bottom: 20px; }
 .bank-card-wrap {
   width: min(330px, 100%); height: 218px; perspective: 1000px; cursor: pointer;
-  display: inline-block; vertical-align: top;
+  display: inline-block; vertical-align: top; border-radius: 16px;
 }
 .bank-card-inner {
-  position: relative; width: 100%; height: 100%;
+  position: relative; width: 100%; height: 100%; border-radius: 16px;
   transition: transform 0.6s ease; transform-style: preserve-3d;
 }
 .bank-card-wrap.flipped .bank-card-inner { transform: rotateY(180deg); }
@@ -256,6 +256,9 @@ form button[type="submit"]:disabled {
   backface-visibility: hidden; -webkit-backface-visibility: hidden;
   display: flex; flex-direction: column; justify-content: space-between;
   overflow: hidden;
+  clip-path: inset(0 round 16px);
+  -webkit-clip-path: inset(0 round 16px);
+  isolation: isolate;
 }
 .bank-front-male {
   background: var(--amber-glass);
@@ -263,6 +266,7 @@ form button[type="submit"]:disabled {
   -webkit-backdrop-filter: blur(var(--amber-blur));
   border: 1px solid var(--amber-glass-border);
   box-shadow: var(--amber-shadow);
+  transform: rotateY(0deg) translateZ(1px);
 }
 .bank-front-female {
   background: rgba(212,168,83,0.22);
@@ -270,20 +274,21 @@ form button[type="submit"]:disabled {
   -webkit-backdrop-filter: blur(var(--amber-blur));
   border: 1px solid rgba(212,168,83,0.38);
   box-shadow: var(--amber-shadow);
+  transform: rotateY(0deg) translateZ(1px);
 }
 .bank-back-male {
   background: var(--amber-glass);
   backdrop-filter: blur(var(--amber-blur));
   -webkit-backdrop-filter: blur(var(--amber-blur));
   border: 1px solid var(--amber-glass-border);
-  transform: rotateY(180deg);
+  transform: rotateY(180deg) translateZ(1px);
 }
 .bank-back-female {
   background: rgba(212,168,83,0.22);
   backdrop-filter: blur(var(--amber-blur));
   -webkit-backdrop-filter: blur(var(--amber-blur));
   border: 1px solid rgba(212,168,83,0.38);
-  transform: rotateY(180deg);
+  transform: rotateY(180deg) translateZ(1px);
 }
 .bank-chip { width: 38px; height: 28px; background: linear-gradient(135deg, var(--gold), var(--gold-light)); border-radius: 5px; box-shadow: 0 2px 8px rgba(212,168,83,0.3); }
 .bank-brand { position: absolute; top: 18px; left: 18px; font-size: 10px; font-weight: 800; letter-spacing: 2px; color: var(--gold); opacity: 0.7; }
@@ -571,10 +576,13 @@ form button[type="submit"]:disabled {
 .stk-cs-card {
   position: absolute;
   max-width: 100%;
+  border-radius: 16px;
   cursor: pointer;
   transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 .stk-cs-card:focus, .stk-cs-card:active { outline: none; -webkit-tap-highlight-color: transparent; }
 .stk-cs-card:focus-visible .stk-cs-face { outline: 2px solid var(--gold); outline-offset: 2px; }
@@ -585,6 +593,10 @@ form button[type="submit"]:disabled {
   border: 1px solid rgba(255, 255, 255, 0.28);
   box-shadow: 0 10px 26px rgba(32, 12, 68, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.35);
   overflow: hidden;
+  clip-path: inset(0 round 16px);
+  -webkit-clip-path: inset(0 round 16px);
+  isolation: isolate;
+  transform: translateZ(0);
   display: flex; align-items: flex-end; justify-content: center;
   transition: box-shadow 0.3s, border-color 0.3s;
   -webkit-tap-highlight-color: transparent;
@@ -594,6 +606,7 @@ form button[type="submit"]:disabled {
   inset: 0;
   width: 100%;
   height: 100%;
+  border-radius: 15px;
   object-fit: cover;
   object-position: center 25%;
   pointer-events: none;
@@ -602,6 +615,7 @@ form button[type="submit"]:disabled {
 .stk-cs-scrim {
   position: absolute;
   inset: 0;
+  border-radius: 15px;
   background: linear-gradient(
     180deg,
     rgba(20, 10, 38, 0.10) 0%,
