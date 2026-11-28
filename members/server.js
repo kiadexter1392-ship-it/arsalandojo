@@ -11,7 +11,7 @@ const { createServer, rateLimit, sanitize, getClientIp, parseId } = require('../
 const db = require('../shared/db');
 const storage = require('../shared/storage');
 const authSession = require('../shared/auth-session');
-const { seedIfEmpty, DEMO } = require('../shared/seed');
+const { seedIfEmpty } = require('../shared/seed');
 const { JALALI_MONTHS, todayJalali, formatJalali, faNum, enNum } = require('../shared/jalali');
 
 const { member: PORT, coach: COACH_PORT } = readPorts();
@@ -83,7 +83,23 @@ app.get('/panel', (ctx) => {
 });
 
 app.get('/healthz', (ctx) => {
-  ctx.json({ ok: true, site: SITE, storageSeparate: true });
+  try {
+    db.get('SELECT 1 AS ok');
+    const stats = storage.storageStats();
+    ctx.json({ ok: true, status: 'healthy', site: SITE, storageSeparate: true, storedFiles: stats.files });
+  } catch {
+    ctx.json({ ok: false, status: 'unhealthy', site: SITE }, 503);
+  }
+});
+
+app.get('/health', (ctx) => {
+  try {
+    db.get('SELECT 1 AS ok');
+    const stats = storage.storageStats();
+    ctx.json({ ok: true, status: 'healthy', site: SITE, storageSeparate: true, storedFiles: stats.files });
+  } catch {
+    ctx.json({ ok: false, status: 'unhealthy', site: SITE }, 503);
+  }
 });
 
 /* ورود مربی به پنل یک شاگرد (از سایت اول) */
@@ -120,7 +136,9 @@ app.get('/api/config', (ctx) => {
     disciplines: ['کاراته', 'کراسفیت', 'بوکس', 'ژیمناستیک', 'موی تای'],
     supportPhone: '+989016399804',
     baleLink: 'https://ble.ir/+989016399804',
-    googleClientId: PUBLIC_GOOGLE_CLIENT_ID
+    googleClientId: PUBLIC_GOOGLE_CLIENT_ID,
+    geminiConfigured: Boolean(String(process.env.GEMINI_API_KEY || '').trim()),
+    geminiStatus: String(process.env.GEMINI_API_KEY || '').trim() ? 'پیکربندی شده' : 'تنظیم نشده'
   });
 });
 
@@ -441,6 +459,7 @@ app.get('/api/me', (ctx) => {
 app.put('/api/me', (ctx) => {
   const u = needMember(ctx);
   if (!u) return;
+  if (u.impersonated) return bad(ctx, 'برای ویرایش پروفایل باید مستقیماً وارد حساب خود شوید', 403);
   const b = ctx.body || {};
   if (b.phone && !/^[0-9+\-\s]{7,15}$/.test(String(b.phone))) return bad(ctx, 'شماره موبایل معتبر نیست');
   const updated = db.updateUser(u.id, {
@@ -551,6 +570,7 @@ app.delete('/api/me/photo', (ctx) => {
 app.post('/api/password', (ctx) => {
   const u = needMember(ctx);
   if (!u) return;
+  if (u.impersonated) return bad(ctx, 'برای تغییر رمز عبور باید مستقیماً وارد حساب خود شوید', 403);
   if (!rateLimit('pass-mem:' + u.id + ':' + getClientIp(ctx.req), 8, 600000)) {
     return bad(ctx, 'تعداد تلاش تغییر رمز بیش از حد است؛ ۱۰ دقیقه صبر کنید', 429);
   }
@@ -772,7 +792,20 @@ app.get('/api/club', (ctx) => {
 
 require('../shared/academy').mount(app, { role: 'member', user: member });
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`سایت شاگردان: http://localhost:${PORT}`);
   console.log(`دیتابیس: ${db.DB_PATH}`);
 });
+
+function closeGracefully() {
+  server.close(() => {
+    db.closeDb();
+    process.exit(0);
+  });
+  setTimeout(() => {
+    db.closeDb();
+    process.exit(0);
+  }, 3000).unref();
+}
+process.on('SIGINT', closeGracefully);
+process.on('SIGTERM', closeGracefully);

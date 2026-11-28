@@ -4,7 +4,7 @@
 (function () {
   'use strict';
 
-  const { api, toast, modal, closeModal, confirmBox, esc, fa, STATUS, METRICS, heatClass, avatar, nl2br, peerUrl, PATH_PREFIX } = UI;
+  const { api, toast, modal, closeModal, confirmBox, esc, fa, STATUS, METRICS, heatClass, avatar, nl2br, peerUrl, downloadFile, PATH_PREFIX } = UI;
   const J = window.Jalali;
 
   let CFG = null;
@@ -506,7 +506,7 @@
     document.getElementById('activeFilter').addEventListener('change', (e) => { state.memberActive = e.target.value; draw(); });
     document.getElementById('followupFilter').addEventListener('change', (e) => { state.memberFollowup = e.target.value; draw(); });
     document.getElementById('exportMembersCsv').addEventListener('click', () => {
-      window.open(PATH_PREFIX + '/api/export/members', '_blank');
+      downloadFile('/api/export/members', 'members.csv');
     });
     document.getElementById('addMemberBtn').addEventListener('click', () => memberForm());
   }
@@ -1035,10 +1035,10 @@
       renderProgress(box);
     });
     document.getElementById('exportCsv').addEventListener('click', () => {
-      window.open(PATH_PREFIX + '/api/export/progress?year=' + state.progressYear, '_blank');
+      downloadFile('/api/export/progress?year=' + state.progressYear, `progress-${state.progressYear}.csv`);
     });
     document.getElementById('exportFullCsv').addEventListener('click', () => {
-      window.open(PATH_PREFIX + '/api/export/progress?detail=full&year=' + state.progressYear, '_blank');
+      downloadFile('/api/export/progress?detail=full&year=' + state.progressYear, `progress-full-${state.progressYear}.csv`);
     });
 
     if (state.progressMode === 'club') await renderClubMatrix(document.getElementById('progressBody'));
@@ -1048,7 +1048,7 @@
   async function renderMemberGrid(target) {
     const picker = `
       <div class="row wrap" style="gap:10px;margin-bottom:14px">
-        <select id="memberSel" style="min-width:230px">
+        <select id="memberSel" style="min-width:min(230px, 100%);max-width:100%">
           ${MEMBERS.map((m) => `<option value="${m.id}" ${m.id === state.progressUserId ? 'selected' : ''}>${esc(m.full_name)} — ${esc(m.belt || '')}</option>`).join('')}
         </select>
         <span class="tiny">روی سرستون هر ماه کلیک کنید تا یادداشت و جزئیات را ثبت کنید. تغییر اعداد بلافاصله ذخیره می‌شود.</span>

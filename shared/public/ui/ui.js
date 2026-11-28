@@ -196,8 +196,23 @@
     return j.jy + '/' + String(j.jm).padStart(2, '0') + '/' + String(j.jd).padStart(2, '0');
   }
 
+  function downloadFile(pathOrUrl, filename = 'download.csv') {
+    const clean = String(pathOrUrl || '');
+    const href = /^([a-z][a-z0-9+.-]*:|\/\/)/i.test(clean) || (PATH_PREFIX && clean.startsWith(PATH_PREFIX + '/'))
+      ? clean
+      : (PATH_PREFIX + clean);
+    const a = document.createElement('a');
+    a.href = href;
+    if (filename) a.download = filename;
+    a.rel = 'noopener';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 1500);
+  }
+
   root.UI = {
     fa, esc, api, toast, modal, closeModal, confirmBox, BLOOD_GROUPS, birthDateValue,
-    heatClass, initials, avatar, STATUS, METRICS, peerUrl, loadConfig, nl2br, PATH_PREFIX
+    heatClass, initials, avatar, STATUS, METRICS, peerUrl, loadConfig, nl2br, downloadFile, PATH_PREFIX
   };
 }(window));

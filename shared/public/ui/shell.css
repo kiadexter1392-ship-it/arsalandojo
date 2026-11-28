@@ -304,7 +304,7 @@ button[type="submit"]:disabled, .btn:disabled { cursor: wait; opacity: 0.72; }
 .field input.en, .en { direction: ltr; text-align: left; }
 
 /* ── Chips ── */
-.chip-row { display: flex; gap: 6px; }
+.chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip {
   padding: 6px 16px; border-radius: 20px;
   background: var(--bg-3); color: var(--muted);
@@ -487,6 +487,11 @@ button[type="submit"]:disabled, .btn:disabled { cursor: wait; opacity: 0.72; }
 }
 
 @media (max-width: 480px) {
+  .overlay { padding: 10px; }
+  .modal { padding: 18px 14px; border-radius: 16px; max-height: 90vh; }
+  .section { padding: 12px; }
+  .topbar { padding: 12px; gap: 8px; }
+  .table-wrap { margin: 0 -12px; padding: 0 12px; }
   .topbar h1 { font-size: 17px; }
   .nav-item .ic { display: none; }
   .nav-item { padding: 8px 10px; font-size: 12px; }

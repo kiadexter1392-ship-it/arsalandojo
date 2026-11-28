@@ -296,8 +296,8 @@ button.dash-perf-row:hover { background: rgba(212,168,83,.08); }
 .dash-person-head { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
 .dash-person-head h3 { margin: 0; font-size: 18px; }
 .dash-person-head p { margin: 2px 0 0; color: var(--academy-muted); font-size: 12px; }
-.dash-person-stats { display: flex; gap: 12px; margin-bottom: 18px; }
-.dash-person-stats div { flex: 1; padding: 12px; border-radius: 14px; background: rgba(212,168,83,.10); border: 1px solid var(--academy-line); display: flex; flex-direction: column; gap: 2px; }
+.dash-person-stats { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+.dash-person-stats div { flex: 1 1 120px; min-width: min(120px, 100%); padding: 12px; border-radius: 14px; background: rgba(212,168,83,.10); border: 1px solid var(--academy-line); display: flex; flex-direction: column; gap: 2px; }
 .dash-person-stats b { font-size: 20px; }
 .dash-person-stats span { font-size: 10px; color: var(--academy-muted); }
 .dash-person-h { font-size: 13px; margin: 16px 0 8px; }

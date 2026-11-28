@@ -23,6 +23,14 @@ const SECURITY_HEADERS = {
   'Content-Security-Policy': "default-src 'none'; sandbox"
 };
 
+const SIGNED_MEDIA_HEADERS = {
+  ...SECURITY_HEADERS,
+  'Cross-Origin-Resource-Policy': 'cross-origin',
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+  'Vary': 'Origin'
+};
+
 function timingSafeMatch(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
   const ab = Buffer.from(a, 'utf8');
@@ -69,9 +77,14 @@ function createStorageHttpServer() {
     }
     const method = (req.method || 'GET').toUpperCase();
 
-    if (method === 'GET' && url.pathname === '/healthz') {
+    if (method === 'GET' && (url.pathname === '/healthz' || url.pathname === '/health')) {
       const stats = storage.storageStats();
-      return sendJson(res, 200, { ok: true, service: 'storage', files: stats.files, bytes: stats.bytes });
+      return sendJson(res, 200, { ok: true, status: 'healthy', service: 'storage', files: stats.files, bytes: stats.bytes });
+    }
+
+    if (method === 'OPTIONS' && url.pathname.startsWith('/s/')) {
+      res.writeHead(204, { ...SIGNED_MEDIA_HEADERS, 'Access-Control-Max-Age': '600' });
+      return res.end();
     }
 
     // Public/Cross-Origin read ONLY via cryptographic expiring HMAC token
@@ -83,7 +96,7 @@ function createStorageHttpServer() {
       if (!obj) return sendJson(res, 404, { ok: false, error: 'فایل پیدا نشد' });
 
       if (req.headers['if-none-match'] === obj.etag) {
-        res.writeHead(304, { ETag: obj.etag, 'Cache-Control': 'private, max-age=120', ...SECURITY_HEADERS });
+        res.writeHead(304, { ETag: obj.etag, 'Cache-Control': 'private, max-age=120', ...SIGNED_MEDIA_HEADERS });
         return res.end();
       }
       const disp = obj.mime === 'application/pdf' ? 'attachment' : 'inline';
@@ -93,7 +106,7 @@ function createStorageHttpServer() {
         'Content-Disposition': disp,
         ETag: obj.etag,
         'Cache-Control': 'private, max-age=120',
-        ...SECURITY_HEADERS
+        ...SIGNED_MEDIA_HEADERS
       });
       return method === 'HEAD' ? res.end() : res.end(obj.buffer);
     }
@@ -137,6 +150,15 @@ if (require.main === module) {
     process.exit(0);
   }
   const server = createStorageHttpServer();
+  server.requestTimeout = 30000;
+  server.keepAliveTimeout = 65000;
+  server.headersTimeout = 66000;
+  const closeGracefully = () => {
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 3000).unref();
+  };
+  process.on('SIGINT', closeGracefully);
+  process.on('SIGTERM', closeGracefully);
   server.listen(PORT, HOST, () => {
     console.log(`[storage] آماده روی http://${HOST}:${PORT}`);
   });

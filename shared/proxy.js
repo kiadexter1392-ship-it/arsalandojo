@@ -15,12 +15,16 @@ function stripUntrustedProxyHeaders(headers) {
 function proxy(targetPort, { prefix = '' } = {}) {
   return (req, res) => {
     const internalToken = process.env.ARSLAN_INTERNAL_PROXY_TOKEN || '';
+    const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim() || req.headers.host || '';
+    const forwardedProto = req.headers['x-forwarded-proto'] || (req.socket && req.socket.encrypted ? 'https' : 'http');
     const headers = {
       ...stripUntrustedProxyHeaders(req.headers),
       host: `localhost:${targetPort}`,
       'x-dojo-proxy': '1',
       'x-dojo-mount': prefix,
-      'x-dojo-origin-host': req.headers.host || '',
+      'x-dojo-origin-host': forwardedHost,
+      'x-forwarded-host': req.headers['x-forwarded-host'] || req.headers.host || '',
+      'x-forwarded-proto': forwardedProto,
       ...(internalToken ? { 'x-dojo-internal': internalToken } : {})
     };
     const outgoing = http.request({
@@ -28,7 +32,8 @@ function proxy(targetPort, { prefix = '' } = {}) {
       port: targetPort,
       path: req.url,
       method: req.method,
-      headers
+      headers,
+      timeout: 30000
     }, incoming => {
       const responseHeaders = { ...incoming.headers };
       const location = responseHeaders.location;
@@ -38,6 +43,9 @@ function proxy(targetPort, { prefix = '' } = {}) {
       }
       res.writeHead(incoming.statusCode, responseHeaders);
       incoming.pipe(res);
+    });
+    outgoing.on('timeout', () => {
+      outgoing.destroy(new Error('Upstream proxy timeout'));
     });
     outgoing.on('error', () => {
       if (res.headersSent) return res.destroy();

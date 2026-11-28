@@ -302,7 +302,8 @@ function verifySameOrigin(ctx) {
   const secFetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
   if (secFetchSite === 'cross-site') return false;
 
-  const expectedHost = String(req.headers['x-dojo-origin-host'] || req.headers.host || '').toLowerCase();
+  const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+  const expectedHost = String(req.headers['x-dojo-origin-host'] || forwardedHost || req.headers.host || '').toLowerCase();
   if (!expectedHost) return false;
 
   const origin = req.headers.origin;
@@ -539,7 +540,8 @@ function createServer(options = {}) {
       });
     });
     server.requestTimeout = 30000;
-    server.headersTimeout = 15000;
+    server.keepAliveTimeout = 65000;
+    server.headersTimeout = 66000;
     server.listen(port, host, () => {
       logger.log(`[${name}] آماده روی http://${host}:${port}`);
       if (callback) callback(server);

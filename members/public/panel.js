@@ -785,7 +785,7 @@
           <div class="card-head">
             <div class="card-title"><span class="dot" style="background:var(--green);box-shadow:0 0 10px var(--green)"></span> 📞 راه‌های ارتباطی</div>
           </div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(250px, 100%),1fr));gap:16px">
             <div style="text-align:center;padding:24px;background:var(--bg-2);border-radius:16px;border:1px solid var(--line)">
               <div style="font-size:36px;margin-bottom:12px">📱</div>
               <h4 style="margin:0 0 8px">پیام‌رسان بله</h4>
@@ -842,7 +842,7 @@
           </div>
           <div class="row wrap" style="gap:14px;padding:12px 14px;border-radius:14px;background:var(--bg-2);border:1px solid var(--line);margin-bottom:16px">
             ${avatar(ME, 'xl')}
-            <div class="grow" style="min-width:190px">
+            <div class="grow" style="min-width:min(190px, 100%)">
               <div class="bold">عکس پروفایل</div>
               <div class="tiny muted" style="margin-top:4px">عکس ذخیره شده در پنل شما و در پروفایل شاگرد برای مربی نمایش داده می‌شود.</div>
               <div class="row wrap" style="gap:8px;margin-top:10px">

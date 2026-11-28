@@ -250,9 +250,15 @@
     }
     $('exportPeople').onclick=()=>{
       const fields=['full_name','username','phone','discipline','gender','birth_date','blood_group','age','weight_kg','height_cm','belt'];
-      const cell=v=>'"'+String(v??'').replace(/^[=+\-@\t\r]/,"'$&").replace(/"/g,'""')+'"';
+      const cell=v=>'"'+String(v??'').replace(/^[\s\uFEFF]*[=+\-@]/,"'$&").replace(/"/g,'""')+'"';
       const lines=[fields,...people.filter(p=>p.role==='member').map(p=>fields.map(k=>p[k]))].map(row=>row.map(cell).join(',')).join('\r\n');
-      const url=URL.createObjectURL(new Blob(['\uFEFF'+lines],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='academy-students.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+      const content='\uFEFF'+lines;
+      if(window.AndroidDojoBridge&&typeof window.AndroidDojoBridge.saveDataUrlFile==='function'){
+        const b64=btoa(unescape(encodeURIComponent(content)));
+        window.AndroidDojoBridge.saveDataUrlFile('data:text/csv;charset=utf-8;base64,'+b64,'academy-students.csv','text/csv');
+        return;
+      }
+      const url=URL.createObjectURL(new Blob([content],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='academy-students.csv';a.style.display='none';document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(url);},3000);
     };
     let searchFrame;
     $('peopleSearch').oninput=()=>{cancelAnimationFrame(searchFrame);searchFrame=requestAnimationFrame(()=>{if(['people','users'].includes(current))draw();});};draw();
@@ -363,11 +369,18 @@
         ? ($('dashRange').value === 'months' ? dash.chart.months : dash.chart.weeks).map(r => [r.label, r.present, r.absent, r.excused])
         : dash.chart.months.map(r => [r.label, r.value ?? '']);
       const header = isAttendance ? ['بازه', 'حضور', 'غیبت', 'موجه'] : ['ماه', 'نمره'];
-      const cell = v => '"' + String(v ?? '').replace(/^[=+\-@\t\r]/, "'$&").replace(/"/g, '""') + '"';
+      const cell = v => '"' + String(v ?? '').replace(/^[\s\uFEFF]*[=+\-@]/, "'$&").replace(/"/g, '""') + '"';
       const lines = [header, ...rows].map(row => row.map(cell).join(',')).join('\r\n');
-      const url = URL.createObjectURL(new Blob(['\uFEFF' + lines], { type: 'text/csv;charset=utf-8' }));
-      const a = document.createElement('a'); a.href = url; a.download = 'academy-dashboard.csv'; a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      const content = '\uFEFF' + lines;
+      if (window.AndroidDojoBridge && typeof window.AndroidDojoBridge.saveDataUrlFile === 'function') {
+        const b64 = btoa(unescape(encodeURIComponent(content)));
+        window.AndroidDojoBridge.saveDataUrlFile('data:text/csv;charset=utf-8;base64,' + b64, 'academy-dashboard.csv', 'text/csv');
+        return;
+      }
+      const url = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' }));
+      const a = document.createElement('a'); a.href = url; a.download = 'academy-dashboard.csv'; a.style.display = 'none';
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 3000);
     };
     $('dashAdd').onclick = () => {
       const writable = Object.entries(config.schema).find(([, v]) => v.writable);

@@ -1309,8 +1309,17 @@ function revokeApiKey(keyId, userId) {
   run('UPDATE api_keys SET active = 0 WHERE id = ? AND user_id = ?', Number(keyId), Number(userId));
 }
 
+function closeDb() {
+  try {
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+  } catch { /* ignore if already closed */ }
+  try {
+    db.close();
+  } catch { /* ignore if already closed */ }
+}
+
 module.exports = {
-  db, DB_PATH, DATA_DIR, storage, sleepSync, execWithRetry,
+  db, DB_PATH, DATA_DIR, storage, sleepSync, execWithRetry, closeDb,
   all, get, run, now,
   hashPassword, verifyPassword,
   findByUsername, findByEmail, normalizeEmail, findById, publicUser, createUser, updateUser, deleteUser, listMembers,

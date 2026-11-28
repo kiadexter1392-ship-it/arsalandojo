@@ -28,6 +28,7 @@ if (!process.env.ARSLAN_STORAGE_SECRET) {
 const STORAGE_INTERNAL_URL = STORAGE_PORT ? `http://127.0.0.1:${STORAGE_PORT}` : '';
 
 const children = [];
+let gatewayServer = null;
 
 function start(label, script, color) {
   const child = spawn(process.execPath, [path.join(__dirname, script)], {
@@ -44,9 +45,9 @@ function start(label, script, color) {
   const prefix = `\x1b[${color}m[${label}]\x1b[0m `;
   child.stdout.on('data', (d) => process.stdout.write(prefix + String(d).replace(/\n$/, '').split('\n').join('\n' + prefix) + '\n'));
   child.stderr.on('data', (d) => process.stderr.write(prefix + String(d)));
-  child.on('exit', (code) => {
-    console.log(`${prefix}خروج با کد ${code}`);
-    shutdown(code === 0 ? 0 : 1);
+  child.on('exit', (code, signal) => {
+    console.log(`${prefix}خروج با کد ${code}${signal ? ` (${signal})` : ''}`);
+    if (!closing) shutdown(code === 0 ? 0 : 1);
   });
   children.push(child);
   return child;
@@ -56,19 +57,48 @@ let closing = false;
 function shutdown(code = 0) {
   if (closing) return;
   closing = true;
-  children.forEach((c) => { try { c.kill('SIGTERM'); } catch { /* ignore */ } });
-  setTimeout(() => process.exit(code), 300);
+  if (gatewayServer) {
+    try { gatewayServer.close(); } catch { /* ignore */ }
+  }
+  const waitExits = children.map((c) => new Promise((resolve) => {
+    if (c.exitCode !== null || c.signalCode !== null) return resolve();
+    c.once('exit', resolve);
+    try { c.kill('SIGTERM'); } catch { resolve(); }
+  }));
+  Promise.race([
+    Promise.all(waitExits),
+    new Promise((resolve) => setTimeout(resolve, 4500))
+  ]).then(() => process.exit(code));
 }
 
 process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
 
+if (process.env.NODE_ENV === 'production' && !process.env.ARSLAN_DATA_DIR && !process.env.ARSLAN_DB) {
+  console.warn('[warn] متغیر ARSLAN_DATA_DIR تنظیم نشده است؛ برای جلوگیری از ازدست‌رفتن SQLite در Railway یک Volume وصل کرده و ARSLAN_DATA_DIR را روی مسیر آن بگذارید.');
+}
+if (process.env.NODE_ENV === 'production' && process.env.STORAGE_PUBLIC_URL && !process.env.ARSLAN_STORAGE_SECRET) {
+  console.warn('[warn] STORAGE_PUBLIC_URL بدون ARSLAN_STORAGE_SECRET تنظیم شده است؛ در تولید مقدار یکسان ARSLAN_STORAGE_SECRET را روی هر دو سرویس بگذارید.');
+}
+
 console.log('باشگاه آنلاین ارسلان دوجو (معماری دو‌بخشی وب + ذخیره‌سازی ایزوله)');
 console.log('──────────────────────────────────────────────────────────');
 
+function probeLocal(port, pathname = '/healthz') {
+  if (!port) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const req = http.get({ hostname: '127.0.0.1', port, path: pathname, timeout: 1500 }, (res) => {
+      res.resume();
+      resolve(res.statusCode >= 200 && res.statusCode < 300);
+    });
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(false));
+  });
+}
+
 if (PORT) {
   /* Railway / Custom Domain Gateway: یک پورت عمومی با تفکیک وب و فضای ذخیره‌سازی */
-  const proxyServer = http.createServer((req, res) => {
+  const proxyServer = http.createServer(async (req, res) => {
     // Strip any attacker-supplied internal proxy headers before routing
     req.headers = stripUntrustedProxyHeaders(req.headers);
 
@@ -85,11 +115,38 @@ if (PORT) {
       const stats = storage.storageStats();
       const body = JSON.stringify({
         ok: true,
+        status: 'healthy',
         gateway: PORT,
+        coachPort: COACH_PORT,
+        memberPort: MEMBER_PORT,
         storagePort: STORAGE_PORT,
-        storedFiles: stats.files
+        storedFiles: stats.files,
+        uptimeSec: Math.round(process.uptime())
       });
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(body);
+    }
+
+    if (parsed.pathname === '/health') {
+      const [membersOk, coachOk, storageOk] = await Promise.all([
+        probeLocal(MEMBER_PORT, '/healthz'),
+        probeLocal(COACH_PORT, '/healthz'),
+        probeLocal(STORAGE_PORT, '/healthz')
+      ]);
+      const allReady = membersOk && coachOk && storageOk;
+      const stats = storage.storageStats();
+      const body = JSON.stringify({
+        ok: allReady,
+        status: allReady ? 'healthy' : 'starting',
+        gateway: PORT,
+        coachPort: COACH_PORT,
+        memberPort: MEMBER_PORT,
+        storagePort: STORAGE_PORT,
+        services: { members: membersOk, coach: coachOk, storage: storageOk },
+        storedFiles: stats.files,
+        uptimeSec: Math.round(process.uptime())
+      });
+      res.writeHead(allReady ? 200 : 503, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       return res.end(body);
     }
 
@@ -110,6 +167,10 @@ if (PORT) {
     /* بقیه مسیرها → شاگردان (پیش‌فرض) */
     proxy(MEMBER_PORT)(req, res);
   });
+  proxyServer.requestTimeout = 35000;
+  proxyServer.keepAliveTimeout = 65000;
+  proxyServer.headersTimeout = 66000;
+  gatewayServer = proxyServer;
   proxyServer.listen(PORT, '0.0.0.0', () => {
     console.log(`  دروازه وب   →  http://0.0.0.0:${PORT}`);
     console.log(`  پنل مربی    →  http://localhost:${COACH_PORT}`);

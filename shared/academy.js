@@ -5,7 +5,7 @@ const db = require('./db');
 const authSession = require('./auth-session');
 const schema = require('./academy-schema');
 const { todayJalali, enNum } = require('./jalali');
-const { rateLimit, getClientIp } = require('./server');
+const { rateLimit, getClientIp, parseId } = require('./server');
 const SPORTS = ['کاراته','کراسفیت','بوکس','ژیمناستیک','موی تای'];
 // Administrative operations never appear in student/coach services, even read-only.
 const ADMIN_ONLY = new Set(['attendance','meetings','discounts']);
@@ -482,9 +482,11 @@ function mount(app, options) {
     const origin = ctx.req.headers.origin;
     let originHost = null;
     if (origin) {
-      try { originHost = new URL(origin).host; } catch { fail('درخواست امن معتبر نیست', 403); }
+      try { originHost = new URL(origin).host.toLowerCase(); } catch { fail('درخواست امن معتبر نیست', 403); }
     }
-    if (ctx.req.headers['x-academy-request'] !== '1' || (originHost && originHost !== (ctx.req.headers['x-dojo-origin-host'] || ctx.req.headers.host))) fail('درخواست امن معتبر نیست', 403);
+    const forwardedHost = String(ctx.req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+    const expectedHost = String(ctx.req.headers['x-dojo-origin-host'] || forwardedHost || ctx.req.headers.host || '').toLowerCase();
+    if (ctx.req.headers['x-academy-request'] !== '1' || (originHost && originHost !== expectedHost)) fail('درخواست امن معتبر نیست', 403);
   }
   const pagePath = admin ? '/admin' : '/academy';
   function page(ctx) {
@@ -512,7 +514,11 @@ function mount(app, options) {
     ctx.json({ ok:true, user: {id:user.id,full_name:user.full_name}, role, schema:defs, sports:SPORTS, ...todayJalali(), paymentPortal:paymentPortal() });
   });
   app.get(base+'/dashboard', ctx => { const u=auth(ctx); ctx.json({ok:true,dashboard:dashboardData(u,roleFor())}); });
-  app.get(base+'/dashboard/person/:id', ctx => { const u=auth(ctx); ctx.json({ok:true,person:personDetail(u,roleFor(),Number(ctx.params.id))}); });
+  app.get(base+'/dashboard/person/:id', ctx => {
+    const u=auth(ctx), pid=parseId(ctx.params.id);
+    if(!pid) fail('شناسه نامعتبر است');
+    ctx.json({ok:true,person:personDetail(u,roleFor(),pid)});
+  });
   app.get(base+'/people', ctx => {
     const user = auth(ctx), role = roleFor();
     let people = db.all(`SELECT * FROM users WHERE verified=1 ${role==='admin'?'':'AND active=1'} AND id NOT IN (SELECT user_id FROM academy_admins) ORDER BY full_name`);
@@ -524,16 +530,21 @@ function mount(app, options) {
   });
   app.get(base+'/records/:kind',ctx => { const u=auth(ctx); ctx.json({ok:true,records:visible(ctx.params.kind,u,roleFor())}); });
   app.post(base+'/records/:kind',ctx => { mutating(ctx); const u=auth(ctx); ctx.json({ok:true,record:save(ctx.params.kind,ctx.body,u,roleFor())},201); });
-  app.put(base+'/records/:kind/:id',ctx => { mutating(ctx); const u=auth(ctx); ctx.json({ok:true,record:save(ctx.params.kind,ctx.body,u,roleFor(),Number(ctx.params.id))}); });
+  app.put(base+'/records/:kind/:id',ctx => {
+    mutating(ctx); const u=auth(ctx), rid=parseId(ctx.params.id);
+    if(!rid) fail('شناسه نامعتبر است');
+    ctx.json({ok:true,record:save(ctx.params.kind,ctx.body,u,roleFor(),rid)});
+  });
   app.delete(base+'/records/:kind/:id',ctx => {
-    mutating(ctx); const u=auth(ctx), kind=ctx.params.kind, role=roleFor();
+    mutating(ctx); const u=auth(ctx), kind=ctx.params.kind, role=roleFor(), rid=parseId(ctx.params.id);
+    if (!rid) fail('شناسه نامعتبر است');
     if (!schema[kind] || !schema[kind].write.includes(role) || !staff(role)) fail('حذف مجاز نیست',403);
     if (kind==='monthly_scores') {
-      if (!db.get('SELECT id FROM progress WHERE id=?',Number(ctx.params.id))) fail('نتیجه پیدا نشد',404);
-      transaction(()=>{db.deleteProgress(ctx.params.id);db.run('INSERT INTO academy_audit(actor_id,action,record_id,kind,created_at) VALUES (?,?,?,?,?)',u.id,'delete',Number(ctx.params.id),kind,db.now());});
+      if (!db.get('SELECT id FROM progress WHERE id=?',rid)) fail('نتیجه پیدا نشد',404);
+      transaction(()=>{db.deleteProgress(rid);db.run('INSERT INTO academy_audit(actor_id,action,record_id,kind,created_at) VALUES (?,?,?,?,?)',u.id,'delete',rid,kind,db.now());});
       return ctx.json({ok:true});
     }
-    const r=record(ctx.params.id,kind);
+    const r=record(rid,kind);
     if (kind==='invoices' && r.data.status==='تأیید دستی') fail('حذف سابقهٔ پرداخت مجاز نیست',409);
     if (db.get('SELECT record_id FROM academy_links WHERE target_id=?',r.id)) fail('این رکورد در بخش دیگری استفاده شده است',409);
     transaction(() => { db.run('DELETE FROM academy_records WHERE id=?',r.id); db.run('INSERT INTO academy_audit(actor_id,action,record_id,kind,created_at) VALUES (?,?,?,?,?)',u.id,'delete',r.id,kind,db.now()); });
@@ -555,10 +566,11 @@ function mount(app, options) {
   if (admin) {
     app.get(base+'/review',ctx=>{auth(ctx); const tables=['users','progress','plans','plan_assignments','announcements','announcement_reads','activity','notifications','self_reports']; ctx.json({ok:true,groups:tables.map(table=>({table,count:db.get(`SELECT COUNT(*) AS c FROM ${table} WHERE verified=0`).c,rows:db.all(`SELECT * FROM ${table} WHERE verified=0 LIMIT 100`).map(row=>{delete row.password_hash; delete row.password_salt; delete row.avatar_photo; delete row.avatar_key; delete row.insurance_file; delete row.insurance_key; return row;})}))});});
     app.post(base+'/review/:table/:id',ctx=>{
-      mutating(ctx);const u=auth(ctx);const table=ctx.params.table;
+      mutating(ctx);const u=auth(ctx);const table=ctx.params.table;const rid=parseId(ctx.params.id);
+      if(!rid) fail('شناسه نامعتبر است');
       if(!['users','progress','plans','plan_assignments','announcements','announcement_reads','activity','notifications','self_reports'].includes(table)) fail('بخش نامعتبر');
-      if(!db.get(`SELECT id FROM ${table} WHERE id=? AND verified=0`,Number(ctx.params.id))) fail('رکورد پیدا نشد',404);
-      transaction(()=>{db.run(`UPDATE ${table} SET verified=1 WHERE id=?`,Number(ctx.params.id));db.run('INSERT INTO academy_audit(actor_id,action,record_id,kind,created_at) VALUES (?,?,?,?,?)',u.id,'verify',Number(ctx.params.id),table,db.now());});ctx.json({ok:true});
+      if(!db.get(`SELECT id FROM ${table} WHERE id=? AND verified=0`,rid)) fail('رکورد پیدا نشد',404);
+      transaction(()=>{db.run(`UPDATE ${table} SET verified=1 WHERE id=?`,rid);db.run('INSERT INTO academy_audit(actor_id,action,record_id,kind,created_at) VALUES (?,?,?,?,?)',u.id,'verify',rid,table,db.now());});ctx.json({ok:true});
     });
     app.post(base+'/users',ctx=>{
       mutating(ctx);const actor=auth(ctx),b=ctx.body;
@@ -570,7 +582,9 @@ function mount(app, options) {
       db.logActivity(actor.id,actor.full_name,'ساخت حساب',user.username);ctx.json({ok:true,user:db.publicUser(user)},201);
     });
     app.put(base+'/users/:id',ctx=>{
-      mutating(ctx); const actor=auth(ctx), user=db.findById(ctx.params.id),b=ctx.body;
+      mutating(ctx); const actor=auth(ctx), uid=parseId(ctx.params.id);
+      if(!uid) fail('شناسه نامعتبر است');
+      const user=db.findById(uid),b=ctx.body;
       if(!user || db.get('SELECT user_id FROM academy_admins WHERE user_id=?',user.id)) fail('حساب قابل ویرایش نیست',404);
       if(typeof b.full_name!=='string'||b.full_name.trim().length<3||b.full_name.length>150)fail('نام کامل معتبر نیست');
       if(b.discipline&&!SPORTS.includes(b.discipline))fail('رشته نامعتبر');
@@ -583,7 +597,9 @@ function mount(app, options) {
       ctx.json({ok:true,user:db.publicUser(db.findById(user.id))});
     });
     app.post(base+'/orders/:id/status',ctx=>{
-      mutating(ctx); const u=auth(ctx); const r=record(ctx.params.id,'orders');const status=ctx.body.status;
+      mutating(ctx); const u=auth(ctx), oid=parseId(ctx.params.id);
+      if(!oid) fail('شناسه نامعتبر است');
+      const r=record(oid,'orders');const status=ctx.body.status;
       if(!['تأییدشده','تحویل‌شده','لغوشده'].includes(status))fail('وضعیت نامعتبر');
       transaction(()=>{
         const current=record(r.id,'orders');

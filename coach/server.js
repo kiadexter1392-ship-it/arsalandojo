@@ -10,7 +10,7 @@ const { proxy } = require('../shared/proxy');
 const { createServer, rateLimit, sanitize, getClientIp, parseId } = require('../shared/server');
 const db = require('../shared/db');
 const authSession = require('../shared/auth-session');
-const { seedIfEmpty, DEMO } = require('../shared/seed');
+const { seedIfEmpty } = require('../shared/seed');
 const { JALALI_MONTHS, todayJalali, formatJalali, faNum } = require('../shared/jalali');
 
 function todayISODate() {
@@ -20,7 +20,7 @@ function todayISODate() {
 function csvRow(cells) {
   return cells.map((c) => {
     let s = String(c === null || c === undefined ? '' : c);
-    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    if (/^[\s\uFEFF]*[=+\-@]/.test(s)) s = "'" + s;
     return `"${s.replace(/"/g, '""')}"`;
   }).join(',');
 }
@@ -111,13 +111,30 @@ app.get('/dashboard', (ctx) => {
 });
 
 app.get('/healthz', (ctx) => {
-  ctx.json({ ok: true, site: SITE, storageSeparate: true });
+  try {
+    db.get('SELECT 1 AS ok');
+    const stats = db.storage.storageStats();
+    ctx.json({ ok: true, status: 'healthy', site: SITE, storageSeparate: true, storedFiles: stats.files });
+  } catch {
+    ctx.json({ ok: false, status: 'unhealthy', site: SITE }, 503);
+  }
+});
+
+app.get('/health', (ctx) => {
+  try {
+    db.get('SELECT 1 AS ok');
+    const stats = db.storage.storageStats();
+    ctx.json({ ok: true, status: 'healthy', site: SITE, storageSeparate: true, storedFiles: stats.files });
+  } catch {
+    ctx.json({ ok: false, status: 'unhealthy', site: SITE }, 503);
+  }
 });
 
 /* -------------------------------- پیکربندی -------------------------------- */
 
 app.get('/api/config', (ctx) => {
   const j = todayJalali();
+  const hasGemini = Boolean(String(process.env.GEMINI_API_KEY || '').trim());
   ctx.json({
     ok: true,
     features: { academy: 'v1', independentAdmin: true, sampleData: false, isolatedStorage: true },
@@ -133,7 +150,9 @@ app.get('/api/config', (ctx) => {
     belts: ['سفید', 'زرد', 'نارنجی', 'سبز', 'آبی', 'قهوه‌ای', 'مشکی دان ۱', 'مشکی دان ۲', 'مشکی دان ۳', 'مشکی دان ۴'],
     disciplines: ['کاراته', 'کراسفیت', 'بوکس', 'ژیمناستیک', 'موی تای'],
     supportPhone: '+989016399804',
-    baleLink: 'https://ble.ir/+989016399804'
+    baleLink: 'https://ble.ir/+989016399804',
+    geminiConfigured: hasGemini,
+    geminiStatus: hasGemini ? 'پیکربندی شده' : 'تنظیم نشده'
   });
 });
 
@@ -228,7 +247,7 @@ app.delete('/api/api-keys/:id', (ctx) => {
 app.get('/api/me', (ctx) => {
   const u = coach(ctx);
   if (!u) return ctx.json({ ok: false, user: null });
-  ctx.json({ ok: true, user: db.publicUser(u), demo: DEMO });
+  ctx.json({ ok: true, user: db.publicUser(u) });
 });
 
 app.put('/api/me', (ctx) => {
@@ -1098,8 +1117,21 @@ app.get('/v1/announcements', (ctx) => {
 require('../shared/academy').mount(app, { role: 'coach', user: coach });
 require('../shared/academy').mount(app, { admin: true });
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`پنل مربی: http://localhost:${PORT}`);
   console.log(`دیتابیس: ${db.DB_PATH}`);
   console.log(`API endpoints: /v1/members, /v1/plans, /v1/stats, /v1/progress/:id, /v1/announcements`);
 });
+
+function closeGracefully() {
+  server.close(() => {
+    db.closeDb();
+    process.exit(0);
+  });
+  setTimeout(() => {
+    db.closeDb();
+    process.exit(0);
+  }, 3000).unref();
+}
+process.on('SIGINT', closeGracefully);
+process.on('SIGTERM', closeGracefully);

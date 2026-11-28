@@ -193,7 +193,7 @@ form button[type="submit"]:disabled {
 }
 .section-title { font-size: 32px; font-weight: 800; margin-bottom: 40px; color: var(--text); }
 .features-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
   gap: 18px;
 }
 .feature-card {
@@ -457,7 +457,7 @@ form button[type="submit"]:disabled {
 .hidden { display: none !important; }
 
 /* CONTACT */
-.contact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 18px; }
+.contact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 18px; }
 .contact-card {
   background: var(--amber-glass);
   backdrop-filter: blur(var(--amber-blur));
@@ -924,7 +924,7 @@ form button[type="submit"]:disabled {
 .tst-act:focus-visible, .tst-x:focus-visible { outline: none; box-shadow: 0 0 0 2px #d4a853; }
 
 /* TOAST (simple, existing) */
-#toastBox, #toasts { position: fixed; top: 70px; left: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 10px; }
+#toastBox, #toasts { position: fixed; top: 70px; left: 16px; max-width: calc(100vw - 32px); z-index: 9999; display: flex; flex-direction: column; gap: 10px; }
 .toast {
   position: relative;
   overflow: hidden;

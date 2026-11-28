@@ -22,5 +22,7 @@ COPY shared ./shared
 COPY storage ./storage
 COPY --from=gooey-build /app/shared/public/gooey-demo ./shared/public/gooey-demo
 COPY scripts ./scripts
+RUN mkdir -p /data /app/data && chmod 700 /data /app/data
 EXPOSE 8080 4174 4175
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD node -e "const p=process.env.PORT||process.env.MEMBER_PORT||8080;fetch('http://127.0.0.1:'+p+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["node", "start.js"]

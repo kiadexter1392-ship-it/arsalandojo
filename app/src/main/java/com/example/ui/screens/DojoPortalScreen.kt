@@ -745,16 +745,16 @@ private class AndroidDojoBridge(
 
     @JavascriptInterface
     fun onPortalGoogleLoginComplete() {
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            runCatching { CookieManager.getInstance().flush() }
-        }
+        runCatching { CookieManager.getInstance().flush() }
     }
 
     @JavascriptInterface
     fun copyText(text: String?): Boolean {
         if (text.isNullOrEmpty()) return false
         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return false
-        cm.setPrimaryClip(ClipData.newPlainText("arslan_dojo", text))
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            runCatching { cm.setPrimaryClip(ClipData.newPlainText("arslan_dojo", text)) }
+        }
         return true
     }
 
@@ -1815,33 +1815,57 @@ private suspend fun downloadAndShareFile(
     mimeType: String?
 ): Boolean = withContext(Dispatchers.IO) {
     runCatching {
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            instanceFollowRedirects = true
-            connectTimeout = 8000
-            readTimeout = 8000
-            CookieManager.getInstance().getCookie(url)?.let { cookie ->
-                setRequestProperty("Cookie", cookie)
+        runCatching { CookieManager.getInstance().flush() }
+        var currentUrl = URL(url)
+        var conn: HttpURLConnection? = null
+        var hops = 0
+        while (hops < 4) {
+            val candidate = (currentUrl.openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false
+                connectTimeout = 10000
+                readTimeout = 15000
+                CookieManager.getInstance().getCookie(currentUrl.toString())?.let { cookie ->
+                    setRequestProperty("Cookie", cookie)
+                }
             }
+            val code = candidate.responseCode
+            if (code in 300..399) {
+                val location = candidate.getHeaderField("Location")
+                candidate.disconnect()
+                if (location.isNullOrBlank()) return@withContext false
+                val nextUrl = URL(currentUrl, location)
+                if (!nextUrl.host.equals(currentUrl.host, ignoreCase = true)) return@withContext false
+                currentUrl = nextUrl
+                hops++
+                continue
+            }
+            conn = candidate
+            break
         }
-        val status = conn.responseCode
-        if (status !in 200..299) {
-            conn.disconnect()
+        val activeConn = conn ?: return@withContext false
+        if (activeConn.responseCode !in 200..299) {
+            activeConn.disconnect()
             return@withContext false
         }
-        val rawName = contentDisposition
-            ?.substringAfter("filename=", "")
-            ?.trim('"', ' ', ';')
-            ?.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-            ?.takeIf { it.isNotEmpty() }
+        val dispHeader = activeConn.getHeaderField("Content-Disposition") ?: contentDisposition
+        val utf8Name = dispHeader
+            ?.let { Regex("""filename\*\s*=\s*UTF-8''([^;\r\n]+)""", RegexOption.IGNORE_CASE).find(it)?.groupValues?.getOrNull(1) }
+            ?.let { runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrNull() }
+        val plainName = dispHeader
+            ?.let { Regex("""filename\s*=\s*"?([^";\r\n]+)"?""", RegexOption.IGNORE_CASE).find(it)?.groupValues?.getOrNull(1) }
+        val rawName = (utf8Name ?: plainName ?: URLUtil.guessFileName(currentUrl.toString(), dispHeader, mimeType))
+            .trim('"', ' ', ';')
+            .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            .takeIf { it.isNotEmpty() }
             ?: "arslan-dojo-export.csv"
         val dir = File(context.cacheDir, "exports").apply { mkdirs() }
         val target = File(dir, rawName)
-        conn.inputStream.use { input ->
+        activeConn.inputStream.use { input ->
             target.outputStream().use { out -> input.copyTo(out) }
         }
-        conn.disconnect()
+        activeConn.disconnect()
 
-        shareExportedFile(context, target, mimeType ?: "text/csv", rawName)
+        shareExportedFile(context, target, mimeType ?: activeConn.contentType ?: "text/csv", rawName)
         true
     }.getOrDefault(false)
 }

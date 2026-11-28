@@ -4,7 +4,7 @@
 (function (root) {
   'use strict';
 
-  const { api, toast, modal, closeModal, esc, fa, avatar, PATH_PREFIX } = UI;
+  const { api, toast, modal, closeModal, esc, fa, avatar, downloadFile, PATH_PREFIX } = UI;
   const J = root.Jalali;
 
   const RECEIPT_STATUS = {
@@ -116,7 +116,7 @@
                         <button type="button" class="chip ${m.status === 'excused' ? 'active' : ''}" data-att-set="excused">موجه</button>
                       </div>
                     </td>
-                    <td><input type="text" class="att-note-inp" value="${esc(m.note || '')}" placeholder="توضیح کوتاه..." style="min-width:140px"></td>
+                    <td><input type="text" class="att-note-inp" value="${esc(m.note || '')}" placeholder="توضیح کوتاه..." style="min-width:min(140px, 100%);width:100%"></td>
                     <td>
                       ${m.consecutive_absences >= 2 ? `
                         <div class="row wrap" style="gap:6px">
@@ -245,7 +245,7 @@
                     </div>
                   </div>
                   <div class="row wrap" style="gap:8px;margin-top:12px;align-items:center">
-                    <input type="text" class="grow" data-coach-note="${r.id}" value="${esc(r.coach_note || '')}" placeholder="توضیح مربی برای شاگرد (اختیاری)..." style="min-width:190px">
+                    <input type="text" class="grow" data-coach-note="${r.id}" value="${esc(r.coach_note || '')}" placeholder="توضیح مربی برای شاگرد (اختیاری)..." style="min-width:min(190px, 100%)">
                     <button type="button" class="btn sm primary" data-review-id="${r.id}" data-review-status="approved">تایید فیش ✓</button>
                     <button type="button" class="btn sm danger" data-review-id="${r.id}" data-review-status="rejected">رد فیش</button>
                   </div>
@@ -281,7 +281,7 @@
       });
 
       target.querySelector('#exportTuitionCsvBtn')?.addEventListener('click', () => {
-        window.open(PATH_PREFIX + '/api/export/tuition', '_blank');
+        downloadFile('/api/export/tuition', 'tuition-receipts.csv');
       });
 
       target.querySelectorAll('[data-show-receipt-img]').forEach((btn) => {
